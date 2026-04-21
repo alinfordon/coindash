@@ -4,6 +4,7 @@ import { getToken } from "next-auth/jwt";
 const PUBLIC_PATHS = [
   "/login",
   "/api/auth",
+  "/api/cron",
   "/_next",
   "/favicon.ico",
 ];

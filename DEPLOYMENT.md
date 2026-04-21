@@ -33,6 +33,16 @@ Aplicația expune **două endpoint-uri idempotente** care execută sincron logic
 
 Ambele verifică `pilotActive` / `analysisCronActive` / `positionCheckCronActive` din settings. **Dacă oprești AI Pilot din UI, cron-urile se auto-skip-uiesc** chiar dacă Linux-ul le apelează — nu e nevoie să modifici crontab-ul ca să pui pe pauză.
 
+### Autentificare pentru cron
+
+Rutele `/api/cron/*` sunt scutite de middleware-ul NextAuth (altfel curl-ul din crontab ar primi `401 Unauthorized`). Opțional poți seta `CRON_SECRET` în `.env.local` și atunci endpoint-urile cer header-ul:
+
+```
+Authorization: Bearer <CRON_SECRET>
+```
+
+Dacă `CRON_SECRET` e gol, endpoint-urile sunt deschise — sigur doar dacă Next.js ascultă pe `127.0.0.1` (vezi și nota de mai jos).
+
 ---
 
 ## 2. Deploy rapid (5 pași)
@@ -130,6 +140,10 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # Position check cron — every 5 minutes
 */5  * * * * curl -fsS -X POST http://127.0.0.1:3000/api/cron/positions >> /var/log/nexus-trade/cron-positions.log 2>&1
+
+# Dacă ai setat CRON_SECRET în .env.local, adaugă header-ul:
+# */5 * * * * curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3000/api/cron/positions ...
+# (în crontab $CRON_SECRET nu e expandat automat — fie îl scrii pe bune în linie, fie îl iei dintr-un wrapper script care face `source /opt/nexus-trade/.env.local`.)
 
 # Optional: log rotation marker (weekly)
 0 3 * * 0 echo "---- rotate $(date -Iseconds) ----" >> /var/log/nexus-trade/cron-analysis.log
