@@ -1,0 +1,122 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Syne:wght@500;600;700;800&display=swap");
+
+@layer base {
+  html,
+  body {
+    @apply bg-bg text-text-primary font-body antialiased;
+    background-image:
+      radial-gradient(at 20% 10%, rgba(0, 245, 255, 0.08) 0, transparent 50%),
+      radial-gradient(at 80% 20%, rgba(123, 47, 255, 0.08) 0, transparent 50%),
+      radial-gradient(at 50% 90%, rgba(0, 255, 136, 0.05) 0, transparent 50%);
+    background-attachment: fixed;
+  }
+  h1, h2, h3, h4, h5 { @apply font-heading tracking-tight; }
+  .mono { @apply font-mono; }
+}
+
+@layer components {
+  .glass {
+    @apply relative rounded-2xl border border-border/70 bg-surface/60 backdrop-blur-xl;
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.04) inset,
+      0 0 0 1px rgba(0, 245, 255, 0.02) inset,
+      0 10px 30px -12px rgba(0, 0, 0, 0.6);
+  }
+  .glass-hover {
+    @apply transition-all duration-300;
+  }
+  .glass-hover:hover {
+    border-color: rgba(0, 245, 255, 0.35);
+    box-shadow:
+      0 0 0 1px rgba(0, 245, 255, 0.25) inset,
+      0 10px 40px -10px rgba(0, 245, 255, 0.15);
+  }
+  .neon-border {
+    @apply border border-primary/40;
+    box-shadow: 0 0 0 1px rgba(0, 245, 255, 0.15) inset, 0 0 18px rgba(0, 245, 255, 0.2);
+  }
+  .pulse-dot {
+    @apply inline-block h-2 w-2 rounded-full;
+    background: #00F5FF;
+    box-shadow: 0 0 0 0 rgba(0, 245, 255, 0.6);
+    animation: pulseRing 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  .pulse-dot.off {
+    background: #5A7A9A;
+    box-shadow: none;
+    animation: none;
+  }
+  .scanline-overlay::before {
+    content: "";
+    pointer-events: none;
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent 2px,
+      rgba(0, 245, 255, 0.025) 3px,
+      transparent 4px
+    );
+    mix-blend-mode: screen;
+  }
+  .mesh-bg::after {
+    content: "";
+    pointer-events: none;
+    position: fixed;
+    inset: -20%;
+    z-index: 0;
+    background:
+      radial-gradient(45% 35% at 20% 30%, rgba(0, 245, 255, 0.08), transparent 70%),
+      radial-gradient(35% 30% at 80% 20%, rgba(123, 47, 255, 0.10), transparent 70%),
+      radial-gradient(40% 40% at 50% 85%, rgba(0, 255, 136, 0.06), transparent 70%);
+    animation: floatMesh 18s ease-in-out infinite;
+    filter: blur(10px);
+  }
+  .text-profit {
+    color: #00FF88;
+    text-shadow: 0 0 8px rgba(0, 255, 136, 0.45);
+  }
+  .text-loss {
+    color: #FF3366;
+    text-shadow: 0 0 8px rgba(255, 51, 102, 0.45);
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium border border-border/80 bg-surface-2/60;
+  }
+  .btn {
+    @apply inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium border border-border bg-surface-2/60 hover:border-primary/50 hover:shadow-neon transition;
+  }
+  .btn-primary {
+    @apply inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold bg-primary/15 border border-primary/40 text-primary hover:bg-primary/25 hover:shadow-neon transition;
+  }
+  .btn-danger {
+    @apply inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold bg-danger/10 border border-danger/40 text-danger hover:bg-danger/20 hover:shadow-neon-red transition;
+  }
+  .input {
+    @apply w-full rounded-lg border border-border bg-surface-2/50 px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary/60 focus:shadow-neon;
+  }
+  .kbd {
+    @apply font-mono text-[10px] px-1.5 py-0.5 rounded bg-surface-2 border border-border text-text-muted;
+  }
+  .divider {
+    @apply h-px bg-gradient-to-r from-transparent via-border to-transparent;
+  }
+}
+
+@keyframes pulseRing {
+  0% { box-shadow: 0 0 0 0 rgba(0, 245, 255, 0.55); }
+  70% { box-shadow: 0 0 0 6px rgba(0, 245, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 245, 255, 0); }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #0A141C; }
+::-webkit-scrollbar-thumb { background: #1A2A3A; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #00F5FF55; }

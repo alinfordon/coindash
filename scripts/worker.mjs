@@ -1,0 +1,40 @@
+// Standalone worker process that runs the cron schedulers independently of Next.js.
+// Usage: `npm run worker` (requires .env.local to be populated).
+
+import { register } from "node:module";
+import { pathToFileURL } from "node:url";
+
+// Use tsx/swc-like transpilation via ts-node if available, otherwise fall back.
+// For simplicity, we invoke the compiled Next build's server runtime by dynamic import.
+// In development we recommend running `npm run dev` (the server route triggers workers on demand).
+
+async function main() {
+  console.log("[nexus worker] starting...");
+  try {
+    // Preload env from .env.local if not already provided
+    await import("./_env.mjs");
+  } catch {}
+  const { startSchedulers } = await import("../.next/server/chunks/worker-runtime.js").catch(async () => {
+    // Fallback: boot a minimal loop and hit our own API.
+    const base = process.env.NEXT_WORKER_BASE_URL || "http://localhost:3000";
+    const hit = async (path) => {
+      try {
+        const r = await fetch(`${base}${path}`, { method: "POST" });
+        console.log(path, r.status);
+      } catch (e) {
+        console.error(path, e.message);
+      }
+    };
+    // 5-min positions
+    setInterval(() => hit("/api/cron/positions"), 5 * 60 * 1000);
+    // 15-min analysis
+    setInterval(() => hit("/api/cron/analysis"), 15 * 60 * 1000);
+    return { startSchedulers: () => console.log("[nexus worker] fallback HTTP loop started") };
+  });
+  startSchedulers?.();
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
