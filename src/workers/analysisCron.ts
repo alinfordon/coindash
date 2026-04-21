@@ -1,6 +1,6 @@
 import { connectDB } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
-import { topUsdcPairs, fetchCandles, fetch24h } from "@/lib/binance";
+import { topUsdcPairs, fetchCandles, fetch24h, fetchUsdcBalance, getSymbolInfo } from "@/lib/binance";
 import { computeIndicatorSnapshot } from "@/lib/indicators";
 import { buildAnalysisPrompt, callAI, safeParseJson } from "@/lib/ai";
 import { Analysis } from "@/models/Analysis";
@@ -63,7 +63,23 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
   const bestBuy = buysSorted[0];
   const candidates = buysSorted.filter((a) => (a.confidence ?? 0) >= settings.minConfidence);
 
+  // Capital check: how much USDC is actually free on Binance?
+  // Only enforced in live mode. In dry run we skip the balance gate.
+  let remainingUsdc = Infinity;
+  let initialUsdc: number | null = null;
+  if (!settings.dryRun) {
+    try {
+      initialUsdc = await fetchUsdcBalance(settings.binanceTestnet);
+      remainingUsdc = initialUsdc;
+    } catch (e: any) {
+      await AILog.create({ action: "ERROR", reasoning: `fetchUsdcBalance: ${e.message?.slice(0, 200)}` });
+      // Fail-safe: if we can't read balance, don't open anything
+      remainingUsdc = 0;
+    }
+  }
+
   const skipped: string[] = [];
+  let insufficientCapital = false;
   for (const c of candidates) {
     if (remainingSlots <= 0) {
       skipped.push(`${c.pair}: maxOpenPairs reached`);
@@ -74,6 +90,26 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
       skipped.push(`${c.pair}: already open`);
       continue;
     }
+
+    // Required USDC for this order = max(maxUsdcPerOrder, minNotional)
+    let requiredUsdc = settings.maxUsdcPerOrder;
+    if (!settings.dryRun) {
+      try {
+        const info = await getSymbolInfo(c.pair, settings.binanceTestnet).catch(() => null);
+        if (info && info.minNotional > requiredUsdc) requiredUsdc = info.minNotional;
+      } catch {
+        /* ignore, fall back to settings.maxUsdcPerOrder */
+      }
+
+      if (remainingUsdc < requiredUsdc) {
+        insufficientCapital = true;
+        skipped.push(`${c.pair}: insufficient USDC (free=${remainingUsdc.toFixed(2)}, need=${requiredUsdc.toFixed(2)})`);
+        // Highest-confidence candidate couldn't be funded → stop; lower-confidence ones won't fit either if they have same/higher requirement.
+        // We still continue the loop in case a later candidate has a smaller minNotional (< requiredUsdc).
+        continue;
+      }
+    }
+
     try {
       const t = await openPosition({
         pair: c.pair,
@@ -90,6 +126,7 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
       });
       opened.push(t);
       remainingSlots--;
+      if (!settings.dryRun) remainingUsdc -= settings.maxUsdcPerOrder;
     } catch (e: any) {
       skipped.push(`${c.pair}: ${e.message?.slice(0, 80)}`);
       await AILog.create({ action: "ERROR", pair: c.pair, reasoning: `open fail: ${e.message}` });
@@ -100,6 +137,7 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
   let reason = "";
   if (opened.length > 0) {
     reason = `Opened ${opened.length}/${candidates.length} candidate(s)`;
+    if (insufficientCapital) reason += ` — stopped early, insufficient USDC (${remainingUsdc.toFixed(2)} left)`;
   } else if (results.length === 0) {
     reason = "No pairs analyzed (Binance / network?)";
   } else if (buys.length === 0) {
@@ -109,15 +147,28 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
     reason = `${buys.length} BUY signal(s) but none cleared minConfidence=${settings.minConfidence}%. Best: ${bestBuy?.pair} ${bestBuy?.recommendation} ${bestBuy?.confidence}%`;
   } else if (remainingSlots <= 0 && openCount > 0) {
     reason = `Slot cap reached: ${openCount}/${settings.maxOpenPairs} open. Best candidate skipped: ${candidates[0]?.pair} ${candidates[0]?.confidence}%`;
+  } else if (insufficientCapital && initialUsdc !== null) {
+    reason = `Insufficient USDC on Binance: free=${initialUsdc.toFixed(2)}, need=${settings.maxUsdcPerOrder.toFixed(2)}/order. Best candidate skipped: ${candidates[0]?.pair} ${candidates[0]?.confidence}%`;
   } else {
     reason = `Skipped all: ${skipped.join(" | ").slice(0, 250)}`;
   }
 
   await AILog.create({
     action: "CRON_END",
-    decision: opened.length ? "OPENED" : "NO_TRADE",
+    decision: opened.length ? "OPENED" : insufficientCapital ? "NO_CAPITAL" : "NO_TRADE",
     reasoning: reason,
-    meta: { analyzed: results.length, dist, buys: buys.length, candidates: candidates.length, opened: opened.length, openCount, remainingSlotsBefore: settings.maxOpenPairs - openCount, bestBuy: bestBuy ? { pair: bestBuy.pair, conf: bestBuy.confidence, rec: bestBuy.recommendation } : null },
+    meta: {
+      analyzed: results.length,
+      dist,
+      buys: buys.length,
+      candidates: candidates.length,
+      opened: opened.length,
+      openCount,
+      remainingSlotsBefore: settings.maxOpenPairs - openCount,
+      bestBuy: bestBuy ? { pair: bestBuy.pair, conf: bestBuy.confidence, rec: bestBuy.recommendation } : null,
+      usdcFree: initialUsdc,
+      insufficientCapital,
+    },
   });
 
   return {
@@ -130,6 +181,8 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
     maxOpenPairs: settings.maxOpenPairs,
     minConfidence: settings.minConfidence,
     bestBuy: bestBuy ? { pair: bestBuy.pair, confidence: bestBuy.confidence, recommendation: bestBuy.recommendation, reasoning: bestBuy.reasoning } : null,
+    usdcFree: initialUsdc,
+    insufficientCapital,
     reason,
     skipped,
   };
