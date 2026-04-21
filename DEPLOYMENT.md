@@ -135,19 +135,20 @@ Adaugă:
 # PATH must include /usr/bin for curl
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+# Înlocuiește TOKENUL cu valoarea din CRON_SECRET (vezi .env.local).
+# Dacă nu ai setat CRON_SECRET, scoate complet header-ul -H "Authorization: ...".
+
 # Analysis cron — every 15 minutes
-*/15 * * * * curl -fsS -X POST http://127.0.0.1:3000/api/cron/analysis >> /var/log/nexus-trade/cron-analysis.log 2>&1
+*/15 * * * * curl -fsS -X POST -H "Authorization: Bearer TOKENUL_TAU" http://127.0.0.1:3000/api/cron/analysis  >> /var/log/nexus-trade/cron-analysis.log 2>&1
 
 # Position check cron — every 5 minutes
-*/5  * * * * curl -fsS -X POST http://127.0.0.1:3000/api/cron/positions >> /var/log/nexus-trade/cron-positions.log 2>&1
-
-# Dacă ai setat CRON_SECRET în .env.local, adaugă header-ul:
-# */5 * * * * curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3000/api/cron/positions ...
-# (în crontab $CRON_SECRET nu e expandat automat — fie îl scrii pe bune în linie, fie îl iei dintr-un wrapper script care face `source /opt/nexus-trade/.env.local`.)
+*/5  * * * * curl -fsS -X POST -H "Authorization: Bearer TOKENUL_TAU" http://127.0.0.1:3000/api/cron/positions >> /var/log/nexus-trade/cron-positions.log 2>&1
 
 # Optional: log rotation marker (weekly)
 0 3 * * 0 echo "---- rotate $(date -Iseconds) ----" >> /var/log/nexus-trade/cron-analysis.log
 ```
+
+> `$CRON_SECRET` **nu** se expandează în crontab din `.env.local` — scrie valoarea pe bune în linie.
 
 Apoi asigură-te că user-ul `nexus` poate scrie în log:
 
@@ -159,7 +160,7 @@ sudo chown nexus:nexus /var/log/nexus-trade/cron-*.log
 **Verifică rapid că merge:**
 
 ```bash
-curl -X POST http://127.0.0.1:3000/api/cron/analysis
+curl -X POST -H "Authorization: Bearer TOKENUL_TAU" http://127.0.0.1:3000/api/cron/analysis
 # răspuns: {"analyzed":41,"opened":0,"reason":"...","distribution":{...}}
 ```
 
