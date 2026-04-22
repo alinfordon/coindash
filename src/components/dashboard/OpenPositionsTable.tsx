@@ -38,6 +38,7 @@ export function OpenPositionsTable() {
               <th className="text-left py-2 px-2">Pair</th>
               <th className="text-right py-2 px-2">Entry</th>
               <th className="text-right py-2 px-2">Current</th>
+              <th className="text-right py-2 px-2">Invested</th>
               <th className="text-right py-2 px-2">P&L %</th>
               <th className="text-right py-2 px-2">P&L USDC</th>
               <th className="text-right py-2 px-2">Duration</th>
@@ -50,7 +51,7 @@ export function OpenPositionsTable() {
           <tbody>
             {trades.length === 0 && (
               <tr>
-                <td colSpan={10} className="py-6 text-center text-text-muted">
+                <td colSpan={11} className="py-6 text-center text-text-muted">
                   No open positions. Enable AI Pilot or wait for next analysis cycle.
                 </td>
               </tr>
@@ -63,6 +64,9 @@ export function OpenPositionsTable() {
                 </td>
                 <td className="text-right mono py-2 px-2">{fmtNum(t.entryPrice, 4)}</td>
                 <td className="text-right mono py-2 px-2">{fmtNum(t.currentPrice, 4)}</td>
+                <td className="text-right mono py-2 px-2 text-text-primary">
+                  {fmtUsd(t.usdcValue ?? (t.entryPrice ?? 0) * (t.quantity ?? 0))}
+                </td>
                 <td className={`text-right mono py-2 px-2 font-semibold ${classOfPnl(t.pnlPercent)}`}>
                   {fmtPct(t.pnlPercent)}
                 </td>
