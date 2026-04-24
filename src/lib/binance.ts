@@ -119,6 +119,48 @@ export async function publicGet<T = any>(path: string, params: Record<string, an
   return res.json();
 }
 
+// ---------- Server time sync (fixes -1021 clock-skew errors) ----------
+// We keep a per-(testnet) offset = serverTime - localTime and refresh it
+// periodically. Signed requests use `Date.now() + offset` as their timestamp,
+// so even if the local machine clock drifts by a few seconds, Binance accepts
+// the request (within recvWindow).
+type TimeSync = { offsetMs: number; fetchedAt: number };
+const TIME_SYNC_TTL_MS = 10 * 60_000;
+function getTimeCache(net: boolean): TimeSync | null {
+  const g2 = global as any;
+  const key = net ? "__NEXUS_TIME_TESTNET__" : "__NEXUS_TIME_LIVE__";
+  return g2[key] || null;
+}
+function setTimeCache(net: boolean, v: TimeSync) {
+  const g2 = global as any;
+  const key = net ? "__NEXUS_TIME_TESTNET__" : "__NEXUS_TIME_LIVE__";
+  g2[key] = v;
+}
+
+async function fetchServerTimeOffset(testnet: boolean): Promise<number> {
+  const t0 = Date.now();
+  const r = await publicGet<{ serverTime: number }>("/api/v3/time", {}, testnet);
+  const t1 = Date.now();
+  // Subtract half round-trip so the offset approximates the clock delta at the
+  // moment the server responded, not when we received the response.
+  const rtt = t1 - t0;
+  return r.serverTime - (t0 + Math.floor(rtt / 2));
+}
+
+async function getServerTimeOffset(testnet: boolean): Promise<number> {
+  const cached = getTimeCache(testnet);
+  if (cached && Date.now() - cached.fetchedAt < TIME_SYNC_TTL_MS) {
+    return cached.offsetMs;
+  }
+  try {
+    const offsetMs = await fetchServerTimeOffset(testnet);
+    setTimeCache(testnet, { offsetMs, fetchedAt: Date.now() });
+    return offsetMs;
+  } catch {
+    return cached?.offsetMs ?? 0;
+  }
+}
+
 export async function signedRequest<T = any>(
   method: "GET" | "POST" | "DELETE",
   path: string,
@@ -129,13 +171,26 @@ export async function signedRequest<T = any>(
   const apiSecret = opts.apiSecret ?? process.env.BINANCE_API_SECRET ?? "";
   const testnet = opts.testnet ?? (process.env.BINANCE_TESTNET || "true") === "true";
   if (!apiKey || !apiSecret) throw new Error("Missing Binance API key/secret");
-  const ts = Date.now();
-  const q = new URLSearchParams({ ...params, timestamp: String(ts), recvWindow: "10000" }).toString();
-  const sig = sign(q, apiSecret);
-  const url = `${baseUrl(testnet)}${path}?${q}&signature=${sig}`;
-  const res = await fetch(url, { method, headers: { "X-MBX-APIKEY": apiKey }, cache: "no-store" });
-  if (!res.ok) throw new Error(`Binance ${path} ${res.status}: ${await res.text()}`);
-  return res.json();
+
+  const doCall = async (retriedAfterSkew: boolean): Promise<T> => {
+    const offset = await getServerTimeOffset(testnet);
+    const ts = Date.now() + offset;
+    const q = new URLSearchParams({ ...params, timestamp: String(ts), recvWindow: "30000" }).toString();
+    const sig = sign(q, apiSecret);
+    const url = `${baseUrl(testnet)}${path}?${q}&signature=${sig}`;
+    const res = await fetch(url, { method, headers: { "X-MBX-APIKEY": apiKey }, cache: "no-store" });
+    if (res.ok) return res.json();
+    const body = await res.text();
+    // If the clock drifted between cache refreshes, Binance returns -1021.
+    // Invalidate the cache, refresh, and retry exactly once.
+    if (!retriedAfterSkew && (body.includes("-1021") || body.includes("recvWindow") || body.includes("Timestamp"))) {
+      setTimeCache(testnet, { offsetMs: 0, fetchedAt: 0 });
+      return doCall(true);
+    }
+    throw new Error(`Binance ${path} ${res.status}: ${body}`);
+  };
+
+  return doCall(false);
 }
 
 export async function fetchCandles(symbol: string, interval: "1h" | "15m" | "5m" | "1m" = "1h", limit = 100, testnet = true): Promise<Candle[]> {
@@ -282,6 +337,91 @@ export async function fetchUsdcBalance(testnet = true): Promise<number> {
   } catch {
     return 0;
   }
+}
+
+/**
+ * Fetches total USDC held on Binance (free + locked). `locked` covers USDC
+ * reserved by open limit/OCO orders, so this represents all cash the bot has
+ * on the exchange. Throws if the account call fails so callers can react.
+ */
+export async function fetchUsdcCashBalance(testnet = true): Promise<{ free: number; locked: number; total: number }> {
+  const acc = await getAccount(testnet);
+  const b = (acc.balances || []).find((x: any) => x.asset === "USDC");
+  const free = b ? +b.free || 0 : 0;
+  const locked = b ? +b.locked || 0 : 0;
+  return { free, locked, total: free + locked };
+}
+
+/**
+ * True portfolio value in USDC, computed directly from Binance account balances
+ * (the source of truth). Includes both `free` and `locked` amounts so funds
+ * sitting in open OCO/limit orders are counted.
+ *
+ * Design for resilience:
+ *   - If /account fails we throw (caller treats as unknown portfolio).
+ *   - If /ticker/24hr fails, we still return USDC cash + stablecoins, so the
+ *     dashboard doesn't flash to $0 when the ticker endpoint hiccups.
+ *   - Each non-stable asset is priced via `*USDC` with `*USDT` fallback.
+ *   - On testnet the ticker universe is small; unknown assets are counted as
+ *     $0 but surfaced in the breakdown so we can debug.
+ */
+export async function fetchPortfolioValueUsdc(
+  testnet = true
+): Promise<{
+  total: number;
+  usdcFree: number;
+  usdcLocked: number;
+  assets: { asset: string; qty: number; price: number; valueUsdc: number }[];
+  tickerOk: boolean;
+}> {
+  const STABLE_1TO1 = new Set(["USDC", "USDT", "BUSD", "FDUSD", "TUSD", "DAI", "USDP", "PYUSD"]);
+  const DUST_USDC = 0.5; // ignore dust below $0.50 (non-stables only)
+
+  const acc = await getAccount(testnet);
+
+  let tickers: Ticker24h[] = [];
+  let tickerOk = false;
+  try {
+    tickers = await fetchAll24h(testnet);
+    tickerOk = true;
+  } catch (err) {
+    console.warn("[portfolio] fetchAll24h failed, pricing stables only:", (err as Error).message);
+  }
+  const priceMap = new Map<string, number>();
+  for (const t of tickers) priceMap.set(t.symbol, t.lastPrice);
+
+  let usdcFree = 0;
+  let usdcLocked = 0;
+  const assets: { asset: string; qty: number; price: number; valueUsdc: number }[] = [];
+
+  for (const b of acc.balances || []) {
+    const free = +b.free || 0;
+    const locked = +b.locked || 0;
+    const qty = free + locked;
+    if (qty <= 0) continue;
+
+    if (b.asset === "USDC") {
+      usdcFree = free;
+      usdcLocked = locked;
+      assets.push({ asset: "USDC", qty, price: 1, valueUsdc: qty });
+      continue;
+    }
+
+    let price = 0;
+    if (STABLE_1TO1.has(b.asset)) {
+      price = 1;
+    } else if (tickerOk) {
+      price = priceMap.get(`${b.asset}USDC`) ?? priceMap.get(`${b.asset}USDT`) ?? 0;
+    }
+    const valueUsdc = qty * price;
+    // Always surface the row in the breakdown even if we couldn't price it,
+    // so $0-priced assets are visible for debugging. Just skip dust.
+    if (price > 0 && valueUsdc < DUST_USDC) continue;
+    assets.push({ asset: b.asset, qty, price, valueUsdc });
+  }
+
+  const total = assets.reduce((a, x) => a + x.valueUsdc, 0);
+  return { total, usdcFree, usdcLocked, assets, tickerOk };
 }
 
 /** Free balance for a single asset (e.g. "BTC", "SOL"). Returns 0 if asset missing or call fails. */

@@ -5,12 +5,13 @@ import { Stat } from "@/components/ui/Card";
 import { classOfPnl, fmtPct, fmtUsd } from "@/lib/utils";
 import { OpenPositionsTable } from "@/components/dashboard/OpenPositionsTable";
 import { PnlChart } from "@/components/dashboard/PnlChart";
+import { TradesChart } from "@/components/dashboard/TradesChart";
 import { HourlyBars } from "@/components/dashboard/HourlyBars";
 import { DailyHeatmap } from "@/components/dashboard/DailyHeatmap";
 import { AIDecisionLog } from "@/components/dashboard/AIDecisionLog";
 import { TopPairs } from "@/components/dashboard/TopPairs";
 import { MarketOverview } from "@/components/dashboard/MarketOverview";
-import { Zap, Pause, ShieldCheck, Activity, Target } from "lucide-react";
+import { Zap, Pause, ShieldCheck, Activity, Target, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 export default function DashboardPage() {
@@ -35,7 +36,7 @@ export default function DashboardPage() {
   }
 
   const pilot = stats?.pilotActive;
-  const pnl24 = stats?.pnl24hUsdc ?? 0;
+  const pnlToday = stats?.pnlTodayUsdc ?? 0;
 
   return (
     <div className="space-y-6">
@@ -45,6 +46,23 @@ export default function DashboardPage() {
           <p className="text-sm text-text-muted mt-1 mono tracking-wider">AUTONOMOUS · AI-PILOTED · REAL-TIME</p>
         </div>
         <div className="flex gap-2">
+          <button
+            className="btn"
+            onClick={async () => {
+              toast.loading("Syncing balance…", { id: "sync-balance" });
+              try {
+                const r = await fetch("/api/balance/sync", { method: "POST" });
+                const j = await r.json();
+                if (j.ok) toast.success(`Balance: $${(+j.total).toFixed(2)}`, { id: "sync-balance" });
+                else toast.error(j.error || "sync failed", { id: "sync-balance", duration: 8000 });
+                mutate();
+              } catch (e: any) {
+                toast.error(e.message, { id: "sync-balance" });
+              }
+            }}
+          >
+            <RefreshCw className="h-4 w-4" /> Sync Balance
+          </button>
           <button className="btn" onClick={() => trigger("/api/cron/analysis", "Running analysis…")}>
             <Activity className="h-4 w-4" /> Run Analysis
           </button>
@@ -58,14 +76,26 @@ export default function DashboardPage() {
         <Stat
           label="Portfolio Value"
           value={fmtUsd(stats?.portfolioValueUsdc ?? 0)}
-          sub={<span className="mono">USDC · {stats?.dryRun ? "DRY RUN" : "LIVE"}</span>}
+          sub={
+            <span className="mono">
+              USDC · {stats?.dryRun ? "DRY RUN" : "LIVE"}
+              {stats?.cashBalanceUpdatedAt && (
+                <>
+                  {" · "}
+                  <span className="text-text-muted">
+                    synced {new Date(stats.cashBalanceUpdatedAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                </>
+              )}
+            </span>
+          }
           accent="primary"
         />
         <Stat
-          label="24H P&L"
-          value={<span className={classOfPnl(pnl24)}>{fmtUsd(pnl24)}</span>}
-          sub={<span className={`mono ${classOfPnl(pnl24)}`}>{fmtPct(stats?.pnl24hPercent ?? 0)}</span>}
-          accent={pnl24 >= 0 ? "success" : "danger"}
+          label="Today P&L"
+          value={<span className={classOfPnl(pnlToday)}>{fmtUsd(pnlToday)}</span>}
+          sub={<span className={`mono ${classOfPnl(pnlToday)}`}>{fmtPct(stats?.pnlTodayPercent ?? 0)}</span>}
+          accent={pnlToday >= 0 ? "success" : "danger"}
         />
         <Stat
           label="Active Pairs"
@@ -100,6 +130,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         <div className="xl:col-span-2 space-y-6">
           <PnlChart />
+          <TradesChart />
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <HourlyBars />
             <DailyHeatmap />

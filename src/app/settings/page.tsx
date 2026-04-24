@@ -13,6 +13,20 @@ const MODELS = {
   ollama: ["llama3.2", "qwen3.5:397b-cloud", "qwen3.5"],
 };
 
+const TIMEZONES = [
+  "Europe/Bucharest",
+  "Europe/London",
+  "Europe/Berlin",
+  "Europe/Paris",
+  "Europe/Madrid",
+  "UTC",
+  "America/New_York",
+  "America/Los_Angeles",
+  "Asia/Singapore",
+  "Asia/Tokyo",
+  "Asia/Dubai",
+];
+
 export default function SettingsPage() {
   const { data, mutate } = useSWR<any>("/api/settings");
   const [form, setForm] = useState<any>(null);
@@ -252,6 +266,22 @@ export default function SettingsPage() {
               value={form.minConfidence}
               onChange={(e) => set({ minConfidence: +e.target.value })}
             />
+          </div>
+          <div>
+            <label className="text-[10px] mono uppercase tracking-widest text-text-muted">
+              Display Timezone
+            </label>
+            <select
+              className="input mt-1"
+              value={form.displayTimezone || "Europe/Bucharest"}
+              onChange={(e) => set({ displayTimezone: e.target.value })}
+            >
+              {TIMEZONES.map((tz) => (
+                <option key={tz} value={tz}>
+                  {tz}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
       </Card>

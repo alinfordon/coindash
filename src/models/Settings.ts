@@ -21,6 +21,12 @@ const SettingsSchema = new Schema(
     riskRewardRatio: { type: Number, default: 2.0 },
     telegramBotToken: { type: String, default: "" },
     telegramChatId: { type: String, default: "" },
+    // IANA timezone used to anchor "today" windows (e.g. Today P&L card).
+    displayTimezone: { type: String, default: "Europe/Bucharest" },
+    // Snapshot of Binance USDC cash (free+locked). Refreshed after open/close
+    // and on-demand, so the dashboard never has to call /account live.
+    cashBalanceUsdc: { type: Number, default: 0 },
+    cashBalanceUpdatedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

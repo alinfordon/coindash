@@ -1,6 +1,6 @@
 import { Trade } from "@/models/Trade";
 import { AILog } from "@/models/AILog";
-import type { RuntimeSettings } from "./settings";
+import { type RuntimeSettings, syncCashBalanceFromBinance } from "./settings";
 import {
   fetchPrice,
   marketBuyQuote,
@@ -152,6 +152,11 @@ export async function openPosition(p: OpenParams) {
     `🟢 <b>OPEN ${p.pair}</b>\nEntry: $${entryPriceActual.toFixed(6)}\nSize: $${p.usdcValue}\nSL: $${finalStopLoss.toFixed(6)} | TP: $${finalTakeProfit.toFixed(6)}\nAI: ${p.aiProvider} (${p.aiConfidence}%)${ocoError ? "\n⚠️ OCO failed — monitoring via cron" : ""}${p.settings.dryRun ? "\n<i>[Dry Run]</i>" : ""}`
   );
 
+  // Refresh cached USDC cash snapshot so the dashboard reflects the spent amount.
+  if (!p.settings.dryRun) {
+    await syncCashBalanceFromBinance(p.settings.binanceTestnet);
+  }
+
   return trade;
 }
 
@@ -238,6 +243,11 @@ export async function closePosition(tradeId: string, reason: "TP_HIT" | "SL_HIT"
   await notifyTelegram(
     `${pnlUsdc >= 0 ? "✅" : "❌"} <b>CLOSE ${trade.pair}</b> (${reason})\nExit: $${price}\nP&L: ${pnlPercent}% ($${pnlUsdc})${sellNote ? `\n⚠️ ${sellNote}` : ""}`
   );
+
+  // Refresh cached USDC cash snapshot so the dashboard reflects the proceeds.
+  if (!settings.dryRun && !trade.dryRun) {
+    await syncCashBalanceFromBinance(settings.binanceTestnet);
+  }
 
   return trade;
 }

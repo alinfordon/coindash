@@ -1,6 +1,7 @@
 import { connectDB } from "./db";
 import { Settings } from "@/models/Settings";
 import { decrypt, encrypt } from "./crypto";
+import { fetchPortfolioValueUsdc } from "./binance";
 
 export type RuntimeSettings = {
   aiProvider: "claude" | "gemini" | "ollama";
@@ -22,6 +23,9 @@ export type RuntimeSettings = {
   riskRewardRatio: number;
   telegramBotToken: string;
   telegramChatId: string;
+  displayTimezone: string;
+  cashBalanceUsdc: number;
+  cashBalanceUpdatedAt: Date | null;
   updatedAt?: Date;
 };
 
@@ -82,6 +86,39 @@ export function syncToEnv(s: RuntimeSettings) {
   process.env.BINANCE_TESTNET = String(s.binanceTestnet);
   if (s.telegramBotToken) process.env.TELEGRAM_BOT_TOKEN = s.telegramBotToken;
   if (s.telegramChatId) process.env.TELEGRAM_CHAT_ID = s.telegramChatId;
+}
+
+/**
+ * Pulls the full Binance portfolio value (USDC cash + all other assets priced
+ * in USDC) and persists it into Settings so the dashboard has a reliable
+ * snapshot to fall back on when a live call hiccups.
+ *
+ * Best-effort: swallows Binance errors and returns the existing snapshot so
+ * the caller's main flow (open/close position) doesn't fail over this.
+ */
+export async function syncCashBalanceFromBinance(testnet?: boolean): Promise<{ total: number; updatedAt: Date | null; error: string | null }> {
+  await connectDB();
+  try {
+    const current = await Settings.findOne().lean();
+    const net = typeof testnet === "boolean" ? testnet : (current as any)?.binanceTestnet ?? true;
+    const pv = await fetchPortfolioValueUsdc(net);
+    const now = new Date();
+    await Settings.findOneAndUpdate(
+      {},
+      { $set: { cashBalanceUsdc: pv.total, cashBalanceUpdatedAt: now } },
+      { upsert: true }
+    );
+    return { total: pv.total, updatedAt: now, error: null };
+  } catch (err: any) {
+    const msg = err?.message?.slice(0, 300) || "sync failed";
+    console.warn("[syncCashBalance] failed:", msg);
+    const doc = await Settings.findOne().lean();
+    return {
+      total: (doc as any)?.cashBalanceUsdc || 0,
+      updatedAt: (doc as any)?.cashBalanceUpdatedAt || null,
+      error: msg,
+    };
+  }
 }
 
 export function redact(s: RuntimeSettings) {

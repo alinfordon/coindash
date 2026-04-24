@@ -1,53 +1,84 @@
 import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/db";
 import { Trade } from "@/models/Trade";
+import { Settings } from "@/models/Settings";
 import { getSettings } from "@/lib/settings";
-import { fetchPrice, fetchUsdcBalance } from "@/lib/binance";
+import { fetchPortfolioValueUsdc, fetchPrice } from "@/lib/binance";
+import { startOfDayInTz } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Dashboard stats. Portfolio Value is taken directly from Binance — sum of
+ * every asset (free+locked) priced in USDC. This is the ground truth and
+ * matches exactly what the user sees on Binance. We also persist the last
+ * successful value in Settings so the UI can fall back to a snapshot if a
+ * single call happens to fail.
+ */
 export async function GET() {
   await connectDB();
   const settings = await getSettings();
 
-  const [openTrades, closedTrades24h, allClosed] = await Promise.all([
+  // "Today" = from midnight in the user-configured timezone until now.
+  // Defaults to Europe/Bucharest so the window matches the user's wall clock
+  // regardless of where the server is running.
+  const tz = settings.displayTimezone || "Europe/Bucharest";
+  const startOfToday = startOfDayInTz(new Date(), tz);
+
+  const [openTrades, closedToday, allClosed] = await Promise.all([
     Trade.find({ status: "OPEN" }).lean(),
-    Trade.find({ status: "CLOSED", closedAt: { $gte: new Date(Date.now() - 24 * 3600_000) } }).lean(),
+    Trade.find({ status: "CLOSED", closedAt: { $gte: startOfToday } }).lean(),
     Trade.find({ status: "CLOSED" }).lean(),
   ]);
 
-  // Live mark-to-market for open positions (best-effort)
-  let openValue = 0;
+  // Unrealized P&L for open trades needs entry price → always derived from DB.
   let openUnrealized = 0;
   for (const t of openTrades) {
     try {
       const p = await fetchPrice(t.pair as string, settings.binanceTestnet);
-      openValue += (p as number) * (t.quantity as number);
       openUnrealized += (p - (t.entryPrice as number)) * (t.quantity as number);
     } catch {
-      openValue += (t.usdcValue as number) || 0;
+      /* skip this position's MTM if price lookup fails */
     }
   }
 
-  const realized24h = closedTrades24h.reduce((a, t) => a + (t.pnlUsdc || 0), 0);
+  const realizedToday = closedToday.reduce((a, t) => a + (t.pnlUsdc || 0), 0);
   const realizedTotal = allClosed.reduce((a, t) => a + (t.pnlUsdc || 0), 0);
 
   const wins = allClosed.filter((t) => (t.pnlUsdc || 0) > 0).length;
   const winRate = allClosed.length > 0 ? (wins / allClosed.length) * 100 : 0;
 
-  let usdcBalance = 0;
+  // Portfolio Value — live from Binance. Falls back to last snapshot on error.
+  let portfolioValue = settings.cashBalanceUsdc || 0;
+  let cashBalanceUpdatedAt = settings.cashBalanceUpdatedAt || null;
+  let portfolioStale = true;
+  let portfolioError: string | null = null;
   try {
-    usdcBalance = await fetchUsdcBalance(settings.binanceTestnet);
-  } catch {
-    /* ignore */
+    const pv = await fetchPortfolioValueUsdc(settings.binanceTestnet);
+    portfolioValue = pv.total;
+    cashBalanceUpdatedAt = new Date();
+    portfolioStale = false;
+    // Persist as the new snapshot so next request has a fresh fallback.
+    await Settings.findOneAndUpdate(
+      {},
+      { $set: { cashBalanceUsdc: pv.total, cashBalanceUpdatedAt } },
+      { upsert: true }
+    );
+  } catch (err: any) {
+    portfolioError = err?.message?.slice(0, 300) || "portfolio fetch failed";
+    console.warn("[dashboard/stats] live portfolio failed, using snapshot:", portfolioError);
   }
 
   return NextResponse.json({
-    portfolioValueUsdc: +(usdcBalance + openValue).toFixed(4),
-    usdcBalance: +usdcBalance.toFixed(4),
-    openValue: +openValue.toFixed(4),
-    pnl24hUsdc: +(realized24h + openUnrealized).toFixed(4),
-    pnl24hPercent: usdcBalance + openValue > 0 ? +(((realized24h + openUnrealized) / (usdcBalance + openValue)) * 100).toFixed(4) : 0,
+    portfolioValueUsdc: +portfolioValue.toFixed(4),
+    cashBalanceUpdatedAt,
+    portfolioStale,
+    portfolioError,
+    pnlTodayUsdc: +(realizedToday + openUnrealized).toFixed(4),
+    pnlTodayPercent:
+      portfolioValue > 0
+        ? +(((realizedToday + openUnrealized) / portfolioValue) * 100).toFixed(4)
+        : 0,
     realizedTotal: +realizedTotal.toFixed(4),
     openPositions: openTrades.length,
     winRate: +winRate.toFixed(2),
