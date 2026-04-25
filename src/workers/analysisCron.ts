@@ -14,8 +14,15 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
   await connectDB();
   const settings = await getSettings();
 
-  if (!opts.manual && (!settings.pilotActive || !settings.analysisCronActive)) {
-    return { skipped: true, reason: "cron disabled" };
+  if (!opts.manual) {
+    if (!settings.pilotActive) {
+      console.log("[analysisCron] skipped — AI Pilot is paused");
+      return { skipped: true, reason: "pilot paused" };
+    }
+    if (!settings.analysisCronActive) {
+      console.log("[analysisCron] skipped — analysis cron is disabled");
+      return { skipped: true, reason: "analysis cron disabled" };
+    }
   }
 
   await AILog.create({ action: "CRON_START", decision: "ANALYSIS", reasoning: "Market scan starting" });

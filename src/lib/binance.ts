@@ -375,7 +375,6 @@ export async function fetchPortfolioValueUsdc(
   tickerOk: boolean;
 }> {
   const STABLE_1TO1 = new Set(["USDC", "USDT", "BUSD", "FDUSD", "TUSD", "DAI", "USDP", "PYUSD"]);
-  const DUST_USDC = 0.5; // ignore dust below $0.50 (non-stables only)
 
   const acc = await getAccount(testnet);
 
@@ -389,6 +388,30 @@ export async function fetchPortfolioValueUsdc(
   }
   const priceMap = new Map<string, number>();
   for (const t of tickers) priceMap.set(t.symbol, t.lastPrice);
+
+  // Cross rates to USDC for indirect pricing (BTC->USDC, BNB->USDC, ETH->USDC).
+  // This mirrors how Binance's UI estimates total wallet value: assets that
+  // only trade against BTC/BNB/ETH still need to be valued. We try USDC first,
+  // then USDT, since both are pegged 1:1 in practice.
+  const crossToUsdc = (base: string): number =>
+    priceMap.get(`${base}USDC`) ?? priceMap.get(`${base}USDT`) ?? 0;
+  const btcUsdc = crossToUsdc("BTC");
+  const bnbUsdc = crossToUsdc("BNB");
+  const ethUsdc = crossToUsdc("ETH");
+
+  function priceAssetUsdc(asset: string): number {
+    if (STABLE_1TO1.has(asset)) return 1;
+    if (!tickerOk) return 0;
+    const direct = priceMap.get(`${asset}USDC`) ?? priceMap.get(`${asset}USDT`);
+    if (direct) return direct;
+    const inBtc = priceMap.get(`${asset}BTC`);
+    if (inBtc && btcUsdc) return inBtc * btcUsdc;
+    const inBnb = priceMap.get(`${asset}BNB`);
+    if (inBnb && bnbUsdc) return inBnb * bnbUsdc;
+    const inEth = priceMap.get(`${asset}ETH`);
+    if (inEth && ethUsdc) return inEth * ethUsdc;
+    return 0;
+  }
 
   let usdcFree = 0;
   let usdcLocked = 0;
@@ -407,16 +430,11 @@ export async function fetchPortfolioValueUsdc(
       continue;
     }
 
-    let price = 0;
-    if (STABLE_1TO1.has(b.asset)) {
-      price = 1;
-    } else if (tickerOk) {
-      price = priceMap.get(`${b.asset}USDC`) ?? priceMap.get(`${b.asset}USDT`) ?? 0;
-    }
+    const price = priceAssetUsdc(b.asset);
     const valueUsdc = qty * price;
-    // Always surface the row in the breakdown even if we couldn't price it,
-    // so $0-priced assets are visible for debugging. Just skip dust.
-    if (price > 0 && valueUsdc < DUST_USDC) continue;
+    // Always include the row (no dust filter) — Binance's wallet total counts
+    // every cent. Unknown-price assets show with price=0 so they're visible
+    // in the breakdown for debugging without distorting the total.
     assets.push({ asset: b.asset, qty, price, valueUsdc });
   }
 
@@ -433,6 +451,23 @@ export async function fetchFreeBalance(asset: string, testnet = true): Promise<n
   } catch {
     return 0;
   }
+}
+
+/**
+ * Total balance (free + locked) for a single asset. Throws on failure so the
+ * caller can react (e.g. reconciliation must NOT treat an unknown balance as
+ * "missing"). `locked` covers funds reserved by open OCO/limit orders, which
+ * are still ours — they just can't be moved freely.
+ */
+export async function fetchAssetBalance(
+  asset: string,
+  testnet = true
+): Promise<{ free: number; locked: number; total: number }> {
+  const acc = await getAccount(testnet);
+  const b = (acc.balances || []).find((x: any) => x.asset === asset);
+  const free = b ? +b.free || 0 : 0;
+  const locked = b ? +b.locked || 0 : 0;
+  return { free, locked, total: free + locked };
 }
 
 /** Derive the base asset from a trading pair (e.g. "SOLUSDC" → "SOL"). */

@@ -10,5 +10,8 @@ export async function POST() {
     total: result.total,
     updatedAt: result.updatedAt,
     error: result.error,
+    breakdown: result.breakdown,
+    unpriced: result.unpriced,
+    tickerOk: result.tickerOk,
   });
 }

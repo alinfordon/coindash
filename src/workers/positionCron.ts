@@ -6,15 +6,33 @@ import { buildPositionCheckPrompt, callAI, safeParseJson } from "@/lib/ai";
 import { Trade } from "@/models/Trade";
 import { AILog } from "@/models/AILog";
 import { closePosition } from "@/lib/trading";
+import { reconcileOpenTrades } from "@/lib/reconciliation";
 
 export async function runPositionCron(opts: { manual?: boolean } = {}) {
   await connectDB();
   const settings = await getSettings();
-  if (!opts.manual && (!settings.pilotActive || !settings.positionCheckCronActive)) {
-    return { skipped: true, reason: "cron disabled" };
+  if (!opts.manual) {
+    if (!settings.pilotActive) {
+      console.log("[positionCron] skipped — AI Pilot is paused");
+      return { skipped: true, reason: "pilot paused" };
+    }
+    if (!settings.positionCheckCronActive) {
+      console.log("[positionCron] skipped — position check cron is disabled");
+      return { skipped: true, reason: "position check cron disabled" };
+    }
   }
 
   await AILog.create({ action: "CRON_START", decision: "POSITION_CHECK", reasoning: "Position sweep starting" });
+
+  // First pass: reconcile any ghost/dust trades (DB says OPEN but Binance has
+  // no real position behind it). This prevents the dashboard from showing
+  // phantom positions and from over-counting capital usage.
+  let reconciled: { closed: any[]; kept: number; errors: any[] } = { closed: [], kept: 0, errors: [] };
+  try {
+    reconciled = await reconcileOpenTrades(settings);
+  } catch (e: any) {
+    console.warn("[positionCron] reconcile pass failed:", e?.message || e);
+  }
 
   const trades = await Trade.find({ status: "OPEN" }).lean();
   const closed: any[] = [];
@@ -81,8 +99,13 @@ export async function runPositionCron(opts: { manual?: boolean } = {}) {
   await AILog.create({
     action: "CRON_END",
     decision: "POSITION_CHECK",
-    reasoning: `Checked ${trades.length}, closed ${closed.length}`,
+    reasoning: `Checked ${trades.length}, closed ${closed.length}, reconciled ${reconciled.closed.length}`,
   });
 
-  return { checked: trades.length, closed: closed.length };
+  return {
+    checked: trades.length,
+    closed: closed.length,
+    reconciled: reconciled.closed.length,
+    reconcileErrors: reconciled.errors.length,
+  };
 }

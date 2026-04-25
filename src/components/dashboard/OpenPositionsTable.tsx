@@ -4,7 +4,7 @@ import useSWR from "swr";
 import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
 import { classOfPnl, fmtDuration, fmtPct, fmtUsd, fmtNum } from "@/lib/utils";
 import { toast } from "sonner";
-import { X } from "lucide-react";
+import { X, Wand2, Undo2 } from "lucide-react";
 
 export function OpenPositionsTable() {
   const { data, mutate } = useSWR<{ trades: any[] }>("/api/trades/open");
@@ -23,12 +23,68 @@ export function OpenPositionsTable() {
     }
   }
 
+  async function restoreReconciled() {
+    toast.loading("Restoring reconciled positions…", { id: "restore" });
+    try {
+      const r = await fetch("/api/positions/restore-reconciled", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ minutesBack: 1440 }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || "Failed");
+      if (j.restoredCount > 0) {
+        toast.success(
+          `Restored ${j.restoredCount} position${j.restoredCount > 1 ? "s" : ""}: ${j.restored.map((c: any) => c.pair).join(", ")}`,
+          { id: "restore", duration: 8000 }
+        );
+      } else {
+        toast.success("Nothing to restore", { id: "restore" });
+      }
+      mutate();
+    } catch (e: any) {
+      toast.error(`Restore failed: ${e.message}`, { id: "restore" });
+    }
+  }
+
+  async function reconcile() {
+    toast.loading("Reconciling positions…", { id: "reconcile" });
+    try {
+      const r = await fetch("/api/positions/reconcile", { method: "POST" });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || "Failed");
+      if (j.closedCount > 0) {
+        toast.success(
+          `Auto-closed ${j.closedCount} dust position${j.closedCount > 1 ? "s" : ""}: ${j.closed.map((c: any) => c.pair).join(", ")}`,
+          { id: "reconcile", duration: 8000 }
+        );
+      } else {
+        toast.success(`Nothing to reconcile (${j.keptCount} active)`, { id: "reconcile" });
+      }
+      mutate();
+    } catch (e: any) {
+      toast.error(`Reconcile failed: ${e.message}`, { id: "reconcile" });
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>Live Positions</CardTitle>
-        <div className="text-[10px] mono uppercase tracking-widest text-text-muted">
-          {trades.length} OPEN · MARK-TO-MARKET
+        <div className="flex items-center gap-3">
+          <div className="text-[10px] mono uppercase tracking-widest text-text-muted">
+            {trades.length} OPEN · MARK-TO-MARKET
+          </div>
+          <button
+            className="btn py-1 px-2 text-[11px]"
+            onClick={restoreReconciled}
+            title="Restore positions wrongly closed by the reconciler in the last 24h"
+          >
+            <Undo2 className="h-3 w-3" /> Restore
+          </button>
+          <button className="btn py-1 px-2 text-[11px]" onClick={reconcile} title="Auto-close ghost/dust positions">
+            <Wand2 className="h-3 w-3" /> Reconcile
+          </button>
         </div>
       </CardHeader>
       <div className="overflow-x-auto">

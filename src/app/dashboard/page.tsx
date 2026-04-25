@@ -53,8 +53,21 @@ export default function DashboardPage() {
               try {
                 const r = await fetch("/api/balance/sync", { method: "POST" });
                 const j = await r.json();
-                if (j.ok) toast.success(`Balance: $${(+j.total).toFixed(2)}`, { id: "sync-balance" });
-                else toast.error(j.error || "sync failed", { id: "sync-balance", duration: 8000 });
+                if (j.ok) {
+                  const unpriced = (j.unpriced || []) as { asset: string; qty: number }[];
+                  if (unpriced.length > 0) {
+                    toast.warning(
+                      `Balance: $${(+j.total).toFixed(2)} · ${unpriced.length} unpriced: ${unpriced.map((u) => u.asset).join(", ")}`,
+                      { id: "sync-balance", duration: 10000 }
+                    );
+                    console.warn("[balance-sync] unpriced assets:", unpriced);
+                    console.info("[balance-sync] full breakdown:", j.breakdown);
+                  } else {
+                    toast.success(`Balance: $${(+j.total).toFixed(2)}`, { id: "sync-balance" });
+                  }
+                } else {
+                  toast.error(j.error || "sync failed", { id: "sync-balance", duration: 8000 });
+                }
                 mutate();
               } catch (e: any) {
                 toast.error(e.message, { id: "sync-balance" });
@@ -63,10 +76,10 @@ export default function DashboardPage() {
           >
             <RefreshCw className="h-4 w-4" /> Sync Balance
           </button>
-          <button className="btn" onClick={() => trigger("/api/cron/analysis", "Running analysis…")}>
+          <button className="btn" onClick={() => trigger("/api/cron/analysis?force=1", "Running analysis…")}>
             <Activity className="h-4 w-4" /> Run Analysis
           </button>
-          <button className="btn" onClick={() => trigger("/api/cron/positions", "Checking positions…")}>
+          <button className="btn" onClick={() => trigger("/api/cron/positions?force=1", "Checking positions…")}>
             <ShieldCheck className="h-4 w-4" /> Check Positions
           </button>
         </div>

@@ -96,7 +96,14 @@ export function syncToEnv(s: RuntimeSettings) {
  * Best-effort: swallows Binance errors and returns the existing snapshot so
  * the caller's main flow (open/close position) doesn't fail over this.
  */
-export async function syncCashBalanceFromBinance(testnet?: boolean): Promise<{ total: number; updatedAt: Date | null; error: string | null }> {
+export async function syncCashBalanceFromBinance(testnet?: boolean): Promise<{
+  total: number;
+  updatedAt: Date | null;
+  error: string | null;
+  breakdown?: { asset: string; qty: number; price: number; valueUsdc: number }[];
+  unpriced?: { asset: string; qty: number }[];
+  tickerOk?: boolean;
+}> {
   await connectDB();
   try {
     const current = await Settings.findOne().lean();
@@ -108,7 +115,15 @@ export async function syncCashBalanceFromBinance(testnet?: boolean): Promise<{ t
       { $set: { cashBalanceUsdc: pv.total, cashBalanceUpdatedAt: now } },
       { upsert: true }
     );
-    return { total: pv.total, updatedAt: now, error: null };
+    const unpriced = pv.assets.filter((a) => a.price === 0).map((a) => ({ asset: a.asset, qty: a.qty }));
+    return {
+      total: pv.total,
+      updatedAt: now,
+      error: null,
+      breakdown: pv.assets,
+      unpriced,
+      tickerOk: pv.tickerOk,
+    };
   } catch (err: any) {
     const msg = err?.message?.slice(0, 300) || "sync failed";
     console.warn("[syncCashBalance] failed:", msg);

@@ -20,14 +20,20 @@ async function main() {
     const hit = async (path) => {
       try {
         const r = await fetch(`${base}${path}`, { method: "POST" });
-        console.log(path, r.status);
+        const j = await r.json().catch(() => ({}));
+        if (j?.skipped) {
+          console.log(`[worker] ${path} → skipped: ${j.reason || "disabled"}`);
+        } else {
+          console.log(`[worker] ${path} → ${r.status}`);
+        }
       } catch (e) {
-        console.error(path, e.message);
+        console.error(`[worker] ${path} error:`, e.message);
       }
     };
-    // 5-min positions
+    // 5-min positions — never adds ?force=1, so the AI Pilot/per-cron
+    // toggles in Settings are honored.
     setInterval(() => hit("/api/cron/positions"), 5 * 60 * 1000);
-    // 15-min analysis
+    // 15-min analysis — same: respects pilotActive + analysisCronActive.
     setInterval(() => hit("/api/cron/analysis"), 15 * 60 * 1000);
     return { startSchedulers: () => console.log("[nexus worker] fallback HTTP loop started") };
   });

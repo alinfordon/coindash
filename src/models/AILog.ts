@@ -5,7 +5,17 @@ const AILogSchema = new Schema(
     timestamp: { type: Date, default: Date.now, index: true },
     action: {
       type: String,
-      enum: ["ANALYSIS", "BUY_SIGNAL", "SELL_SIGNAL", "HOLD", "POSITION_CHECK", "CRON_START", "CRON_END", "ERROR"],
+      enum: [
+        "ANALYSIS",
+        "BUY_SIGNAL",
+        "SELL_SIGNAL",
+        "HOLD",
+        "POSITION_CHECK",
+        "CRON_START",
+        "CRON_END",
+        "ERROR",
+        "RECONCILE",
+      ],
       default: "ANALYSIS",
     },
     pair: String,
