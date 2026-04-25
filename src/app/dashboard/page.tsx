@@ -40,14 +40,14 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-end justify-between">
+      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
-          <h1 className="text-3xl font-heading font-bold tracking-tight">Command Center</h1>
-          <p className="text-sm text-text-muted mt-1 mono tracking-wider">AUTONOMOUS · AI-PILOTED · REAL-TIME</p>
+          <h1 className="text-2xl sm:text-3xl font-heading font-bold tracking-tight">Command Center</h1>
+          <p className="text-xs sm:text-sm text-text-muted mt-1 mono tracking-wider">AUTONOMOUS · AI-PILOTED · REAL-TIME</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button
-            className="btn"
+            className="btn flex-1 sm:flex-none justify-center"
             onClick={async () => {
               toast.loading("Syncing balance…", { id: "sync-balance" });
               try {
@@ -76,10 +76,16 @@ export default function DashboardPage() {
           >
             <RefreshCw className="h-4 w-4" /> Sync Balance
           </button>
-          <button className="btn" onClick={() => trigger("/api/cron/analysis?force=1", "Running analysis…")}>
+          <button
+            className="btn flex-1 sm:flex-none justify-center"
+            onClick={() => trigger("/api/cron/analysis?force=1", "Running analysis…")}
+          >
             <Activity className="h-4 w-4" /> Run Analysis
           </button>
-          <button className="btn" onClick={() => trigger("/api/cron/positions?force=1", "Checking positions…")}>
+          <button
+            className="btn flex-1 sm:flex-none justify-center"
+            onClick={() => trigger("/api/cron/positions?force=1", "Checking positions…")}
+          >
             <ShieldCheck className="h-4 w-4" /> Check Positions
           </button>
         </div>
