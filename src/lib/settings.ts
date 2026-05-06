@@ -2,6 +2,7 @@ import { connectDB } from "./db";
 import { Settings } from "@/models/Settings";
 import { decrypt, encrypt } from "./crypto";
 import { fetchPortfolioValueUsdc } from "./binance";
+import { normalizePairBlacklistEntries } from "./pairBlacklistCore";
 
 export type RuntimeSettings = {
   aiProvider: "claude" | "gemini" | "ollama";
@@ -26,6 +27,8 @@ export type RuntimeSettings = {
   displayTimezone: string;
   cashBalanceUsdc: number;
   cashBalanceUpdatedAt: Date | null;
+  /** Uppercase symbols or base assets excluded from automated opens (see Settings UI). */
+  pairBlacklist: string[];
   updatedAt?: Date;
 };
 
@@ -43,12 +46,14 @@ export async function getSettings(): Promise<RuntimeSettings> {
       binanceApiKey: encrypt(process.env.BINANCE_API_KEY || ""),
       binanceApiSecret: encrypt(process.env.BINANCE_API_SECRET || ""),
       binanceTestnet: (process.env.BINANCE_TESTNET || "true") === "true",
+      pairBlacklist: [],
     });
     doc = created.toObject();
   }
 
   const out: any = { ...doc };
   for (const f of SECRET_FIELDS) out[f] = decrypt(out[f] || "");
+  out.pairBlacklist = normalizePairBlacklistEntries(out.pairBlacklist);
   syncToEnv(out);
   return out as RuntimeSettings;
 }
@@ -56,6 +61,9 @@ export async function getSettings(): Promise<RuntimeSettings> {
 export async function updateSettings(patch: Partial<RuntimeSettings>): Promise<RuntimeSettings> {
   await connectDB();
   const update: any = { ...patch };
+  if ("pairBlacklist" in update && Array.isArray(update.pairBlacklist)) {
+    update.pairBlacklist = normalizePairBlacklistEntries(update.pairBlacklist);
+  }
   for (const f of SECRET_FIELDS) {
     if (f in update && typeof update[f] === "string") {
       update[f] = update[f] ? encrypt(update[f]) : "";
@@ -64,6 +72,7 @@ export async function updateSettings(patch: Partial<RuntimeSettings>): Promise<R
   const doc = await Settings.findOneAndUpdate({}, { $set: update }, { new: true, upsert: true }).lean();
   const out: any = { ...doc };
   for (const f of SECRET_FIELDS) out[f] = decrypt(out[f] || "");
+  out.pairBlacklist = normalizePairBlacklistEntries(out.pairBlacklist);
   syncToEnv(out);
   return out as RuntimeSettings;
 }

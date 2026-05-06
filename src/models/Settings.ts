@@ -23,6 +23,8 @@ const SettingsSchema = new Schema(
     telegramChatId: { type: String, default: "" },
     // IANA timezone used to anchor "today" windows (e.g. Today P&L card).
     displayTimezone: { type: String, default: "Europe/Bucharest" },
+    /** Base tickers (e.g. BTC) or full symbols (BTCUSDC) excluded from automated trading. */
+    pairBlacklist: { type: [String], default: [] },
     // Snapshot of Binance USDC cash (free+locked). Refreshed after open/close
     // and on-demand, so the dashboard never has to call /account live.
     cashBalanceUsdc: { type: Number, default: 0 },

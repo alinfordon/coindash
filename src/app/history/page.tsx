@@ -1,10 +1,32 @@
 "use client";
 
 import useSWR from "swr";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardHeader, CardTitle, Stat } from "@/components/ui/Card";
 import { classOfPnl, fmtDuration, fmtNum, fmtPct, fmtUsd } from "@/lib/utils";
-import { Download } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download } from "lucide-react";
+
+const PAGE_SIZE = 25;
+
+function buildHistoryQuery(params: {
+  pair: string;
+  outcome: string;
+  aiModel: string;
+  from: string;
+  to: string;
+  page: number;
+  limit?: number;
+}) {
+  const qs = new URLSearchParams();
+  if (params.pair) qs.set("pair", params.pair);
+  if (params.outcome) qs.set("outcome", params.outcome);
+  if (params.aiModel) qs.set("aiModel", params.aiModel);
+  if (params.from) qs.set("from", params.from);
+  if (params.to) qs.set("to", params.to);
+  qs.set("page", String(params.page));
+  qs.set("limit", String(params.limit ?? PAGE_SIZE));
+  return qs.toString();
+}
 
 export default function HistoryPage() {
   const [pair, setPair] = useState("");
@@ -12,19 +34,44 @@ export default function HistoryPage() {
   const [aiModel, setAiModel] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [page, setPage] = useState(1);
 
-  const qs = new URLSearchParams();
-  if (pair) qs.set("pair", pair);
-  if (outcome) qs.set("outcome", outcome);
-  if (aiModel) qs.set("aiModel", aiModel);
-  if (from) qs.set("from", from);
-  if (to) qs.set("to", to);
+  useEffect(() => {
+    setPage(1);
+  }, [pair, outcome, aiModel, from, to]);
 
-  const { data } = useSWR<{ trades: any[]; stats: any }>(`/api/trades/history?${qs.toString()}`);
+  const qs = buildHistoryQuery({ pair, outcome, aiModel, from, to, page });
+
+  const { data } = useSWR<{
+    trades: any[];
+    stats: Record<string, number>;
+    pagination: { page: number; limit: number; total: number; totalPages: number };
+  }>(`/api/trades/history?${qs}`);
   const trades = data?.trades || [];
   const stats = data?.stats || {};
+  const pagination = data?.pagination;
+  const totalPages = pagination?.totalPages ?? 0;
+  const total = pagination?.total ?? stats.total ?? 0;
+  const limit = pagination?.limit ?? PAGE_SIZE;
+  const rangeStart = total ? (page - 1) * limit + 1 : 0;
+  const rangeEnd = total ? Math.min(page * limit, total) : 0;
 
-  function exportCsv() {
+  useEffect(() => {
+    if (totalPages > 0 && page > totalPages) setPage(totalPages);
+  }, [totalPages, page]);
+
+  async function exportCsv() {
+    const tradesAll: any[] = [];
+    let p = 1;
+    while (true) {
+      const res = await fetch(`/api/trades/history?${buildHistoryQuery({ pair, outcome, aiModel, from, to, page: p })}`);
+      const j = await res.json();
+      tradesAll.push(...(j.trades || []));
+      const tp = j.pagination?.totalPages ?? 0;
+      if (!j.trades?.length || p >= tp) break;
+      p += 1;
+    }
+
     const rows = [
       [
         "pair",
@@ -42,7 +89,7 @@ export default function HistoryPage() {
         "aiModel",
         "aiConfidence",
       ],
-      ...trades.map((t) => [
+      ...tradesAll.map((t) => [
         t.pair,
         t.side,
         t.openedAt,
@@ -190,6 +237,34 @@ export default function HistoryPage() {
               })}
             </tbody>
           </table>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/30 px-2 py-3">
+          <p className="text-xs text-text-muted mono">
+            {total ? `${rangeStart}–${rangeEnd} of ${total}` : "0 results"}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="btn py-1.5 px-2 disabled:opacity-40 disabled:pointer-events-none"
+              disabled={page <= 1 || totalPages === 0}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              aria-label="Previous page"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <span className="text-sm mono text-text-muted min-w-[5rem] text-center">
+              {totalPages ? `${page} / ${totalPages}` : "—"}
+            </span>
+            <button
+              type="button"
+              className="btn py-1.5 px-2 disabled:opacity-40 disabled:pointer-events-none"
+              disabled={totalPages === 0 || page >= totalPages}
+              onClick={() => setPage((p) => p + 1)}
+              aria-label="Next page"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       </Card>
     </div>

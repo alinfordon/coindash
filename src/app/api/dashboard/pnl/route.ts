@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/db";
 import { Trade } from "@/models/Trade";
+import { dashboardClosedTradeMatch } from "@/lib/dashboardTrades";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +32,7 @@ export async function GET(req: Request) {
       bucketMs = 15 * 60_000;
   }
 
-  const trades = await Trade.find({ status: "CLOSED", closedAt: { $gte: since } })
+  const trades = await Trade.find({ ...dashboardClosedTradeMatch(), closedAt: { $gte: since } })
     .sort({ closedAt: 1 })
     .lean();
 

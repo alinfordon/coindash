@@ -13,6 +13,7 @@ import {
   baseAssetOf,
 } from "./binance";
 import { notifyTelegram } from "./notify";
+import { isPairBlacklisted } from "./pairBlacklist";
 
 export type OpenParams = {
   pair: string;
@@ -30,6 +31,10 @@ export type OpenParams = {
 
 export async function openPosition(p: OpenParams) {
   const testnet = p.settings.binanceTestnet;
+
+  if (isPairBlacklisted(p.pair, p.settings.pairBlacklist)) {
+    throw new Error(`${p.pair} is excluded (pair blacklist in Settings)`);
+  }
 
   // Resolve current price + symbol filters first
   const [marketPrice, info] = await Promise.all([

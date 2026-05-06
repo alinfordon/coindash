@@ -4,8 +4,9 @@ import useSWR from "swr";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
-import { AlertTriangle, Save, PlugZap, Zap, Pause } from "lucide-react";
+import { AlertTriangle, Save, PlugZap, Zap, Pause, Ban, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { normalizePairBlacklistEntries } from "@/lib/pairBlacklistCore";
 
 const MODELS = {
   claude: ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5","claude-sonnet-4-6"],
@@ -32,12 +33,31 @@ export default function SettingsPage() {
   const [form, setForm] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [confirmBinance, setConfirmBinance] = useState(false);
+  const [blacklistDraft, setBlacklistDraft] = useState("");
 
   useEffect(() => {
-    if (data && !form) setForm(data);
+    if (data && !form) {
+      const next = {
+        ...data,
+        pairBlacklist: normalizePairBlacklistEntries(data.pairBlacklist),
+      };
+      setForm(next);
+    }
   }, [data, form]);
 
   const dirty = useMemo(() => JSON.stringify(form) !== JSON.stringify(data), [form, data]);
+
+  function pushBlacklistDraft() {
+    const parts = blacklistDraft.split(/[\s,]+/).filter(Boolean);
+    if (!parts.length) return;
+    set({
+      pairBlacklist: normalizePairBlacklistEntries([
+        ...normalizePairBlacklistEntries(form.pairBlacklist),
+        ...parts,
+      ]),
+    });
+    setBlacklistDraft("");
+  }
 
   if (!form) return <div className="text-text-muted">Loading settings…</div>;
 
@@ -282,6 +302,56 @@ export default function SettingsPage() {
                 </option>
               ))}
             </select>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-border/60 bg-surface-2/20 p-4 mt-6">
+          <div className="flex items-center gap-2 mb-1">
+            <Ban className="h-4 w-4 text-warning shrink-0" />
+            <span className="text-sm font-heading tracking-wide">Pair blacklist</span>
+          </div>
+          <p className="text-[11px] text-text-muted mono mb-3 leading-relaxed">
+            Symbols excluded from automated trading (analysis cron). Use base ticker (BTC, ETH) or full pair (BTCUSDC). Does not close existing positions.
+          </p>
+          <div className="flex flex-wrap gap-2 mb-3 min-h-[28px]">
+            {normalizePairBlacklistEntries(form.pairBlacklist).length === 0 ? (
+              <span className="text-xs text-text-muted italic">No blocked symbols</span>
+            ) : (
+              normalizePairBlacklistEntries(form.pairBlacklist).map((sym) => (
+                <span key={sym} className="chip border-warning/35 text-warning gap-1 pr-1">
+                  <span className="mono">{sym}</span>
+                  <button
+                    type="button"
+                    className="rounded-md p-0.5 hover:bg-warning/15 transition"
+                    aria-label={`Remove ${sym}`}
+                    onClick={() =>
+                      set({
+                        pairBlacklist: normalizePairBlacklistEntries(form.pairBlacklist).filter((x) => x !== sym),
+                      })
+                    }
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))
+            )}
+          </div>
+          <div className="flex gap-2 flex-wrap sm:flex-nowrap">
+            <input
+              className="input flex-1 min-w-[12rem]"
+              placeholder="e.g. DOGE or SOLUSDC"
+              value={blacklistDraft}
+              onChange={(e) => setBlacklistDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  pushBlacklistDraft();
+                }
+              }}
+            />
+            <button type="button" className="btn shrink-0" onClick={pushBlacklistDraft}>
+              <Plus className="h-4 w-4" /> Add
+            </button>
           </div>
         </div>
       </Card>

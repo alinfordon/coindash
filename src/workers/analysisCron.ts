@@ -7,6 +7,7 @@ import { Analysis } from "@/models/Analysis";
 import { AILog } from "@/models/AILog";
 import { Trade } from "@/models/Trade";
 import { openPosition } from "@/lib/trading";
+import { isPairBlacklisted } from "@/lib/pairBlacklist";
 
 const CONCURRENCY = 5;
 
@@ -30,7 +31,7 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
   let pairs: { symbol: string; priceChangePercent: number; quoteVolume: number; lastPrice: number; highPrice: number; lowPrice: number; volume: number }[] = [];
   try {
     const top = await topUsdcPairs(50, settings.binanceTestnet);
-    pairs = top;
+    pairs = top.filter((x) => !isPairBlacklisted(x.symbol, settings.pairBlacklist));
   } catch (e: any) {
     await AILog.create({ action: "ERROR", reasoning: `topUsdcPairs: ${e.message}` });
     return { error: e.message };

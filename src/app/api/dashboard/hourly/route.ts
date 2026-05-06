@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/db";
 import { Trade } from "@/models/Trade";
+import { dashboardClosedTradeMatch } from "@/lib/dashboardTrades";
 
 export const dynamic = "force-dynamic";
 
@@ -8,7 +9,7 @@ export async function GET() {
   await connectDB();
   const now = Date.now();
   const since = now - 24 * 3600_000;
-  const trades = await Trade.find({ status: "CLOSED", closedAt: { $gte: new Date(since) } }).lean();
+  const trades = await Trade.find({ ...dashboardClosedTradeMatch(), closedAt: { $gte: new Date(since) } }).lean();
   const hours: { hour: number; pnl: number; label: string }[] = [];
   for (let i = 0; i < 24; i++) {
     const t = since + i * 3600_000;

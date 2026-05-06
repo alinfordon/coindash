@@ -12,7 +12,8 @@ export async function GET(req: Request) {
   const aiModel = searchParams.get("aiModel");
   const from = searchParams.get("from");
   const to = searchParams.get("to");
-  const limit = Math.min(+(searchParams.get("limit") || 200), 1000);
+  const page = Math.max(1, +(searchParams.get("page") || 1) || 1);
+  const limit = Math.min(Math.max(1, +(searchParams.get("limit") || 25) || 25), 100);
 
   const q: any = { status: "CLOSED" };
   if (pair) q.pair = pair;
@@ -25,31 +26,55 @@ export async function GET(req: Request) {
   if (outcome === "profit") q.pnlUsdc = { $gt: 0 };
   if (outcome === "loss") q.pnlUsdc = { $lt: 0 };
 
-  const trades = await Trade.find(q).sort({ closedAt: -1 }).limit(limit).lean();
+  const skip = (page - 1) * limit;
 
-  // Stats
-  const total = trades.length;
-  const wins = trades.filter((t) => (t.pnlUsdc || 0) > 0);
-  const losses = trades.filter((t) => (t.pnlUsdc || 0) < 0);
-  const winRate = total > 0 ? (wins.length / total) * 100 : 0;
-  const avgProfit = wins.length ? wins.reduce((a, t) => a + (t.pnlUsdc || 0), 0) / wins.length : 0;
-  const avgLoss = losses.length ? losses.reduce((a, t) => a + (t.pnlUsdc || 0), 0) / losses.length : 0;
-  const largestWin = wins.reduce((m, t) => Math.max(m, t.pnlUsdc || 0), 0);
-  const largestLoss = losses.reduce((m, t) => Math.min(m, t.pnlUsdc || 0), 0);
-  const returns = trades.map((t) => t.pnlPercent || 0);
-  const mean = returns.length ? returns.reduce((a, b) => a + b, 0) / returns.length : 0;
-  const variance = returns.length ? returns.reduce((a, b) => a + (b - mean) ** 2, 0) / returns.length : 0;
-  const sharpe = variance > 0 ? mean / Math.sqrt(variance) : 0;
+  const statsPipeline = [
+    { $match: q },
+    {
+      $group: {
+        _id: null,
+        total: { $sum: 1 },
+        winCount: { $sum: { $cond: [{ $gt: ["$pnlUsdc", 0] }, 1, 0] } },
+        lossCount: { $sum: { $cond: [{ $lt: ["$pnlUsdc", 0] }, 1, 0] } },
+        sumWinPnl: { $sum: { $cond: [{ $gt: ["$pnlUsdc", 0] }, "$pnlUsdc", 0] } },
+        sumLossPnl: { $sum: { $cond: [{ $lt: ["$pnlUsdc", 0] }, "$pnlUsdc", 0] } },
+        largestWin: { $max: { $cond: [{ $gt: ["$pnlUsdc", 0] }, "$pnlUsdc", null] } },
+        largestLoss: { $min: { $cond: [{ $lt: ["$pnlUsdc", 0] }, "$pnlUsdc", null] } },
+        meanPct: { $avg: { $ifNull: ["$pnlPercent", 0] } },
+        stdPct: { $stdDevPop: { $ifNull: ["$pnlPercent", 0] } },
+      },
+    },
+  ];
+
+  const [trades, statsAgg] = await Promise.all([
+    Trade.find(q).sort({ closedAt: -1 }).skip(skip).limit(limit).lean(),
+    Trade.aggregate(statsPipeline),
+  ]);
+
+  const s = statsAgg[0];
+  const total = s?.total ?? 0;
+  const winCount = s?.winCount ?? 0;
+  const lossCount = s?.lossCount ?? 0;
+  const winRate = total > 0 ? (winCount / total) * 100 : 0;
+  const avgProfit = winCount ? (s!.sumWinPnl as number) / winCount : 0;
+  const avgLoss = lossCount ? (s!.sumLossPnl as number) / lossCount : 0;
+  const largestWin = s?.largestWin ?? 0;
+  const largestLoss = s?.largestLoss ?? 0;
+  const stdPct = s?.stdPct ?? 0;
+  const sharpe = stdPct > 0 ? ((s?.meanPct as number) || 0) / stdPct : 0;
+
+  const totalPages = total ? Math.ceil(total / limit) : 0;
 
   return NextResponse.json({
     trades,
+    pagination: { page, limit, total, totalPages },
     stats: {
       total,
       winRate: +winRate.toFixed(2),
       avgProfit: +avgProfit.toFixed(4),
       avgLoss: +avgLoss.toFixed(4),
-      largestWin: +largestWin.toFixed(4),
-      largestLoss: +largestLoss.toFixed(4),
+      largestWin: +Number(largestWin || 0).toFixed(4),
+      largestLoss: +Number(largestLoss || 0).toFixed(4),
       sharpe: +sharpe.toFixed(3),
     },
   });

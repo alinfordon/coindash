@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/db";
 import { Trade } from "@/models/Trade";
+import { dashboardClosedTradeMatch } from "@/lib/dashboardTrades";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   await connectDB();
-  const trades = await Trade.find({ status: "CLOSED" }).sort({ closedAt: -1 }).limit(200).lean();
+  const trades = await Trade.find(dashboardClosedTradeMatch()).sort({ closedAt: -1 }).limit(200).lean();
   const map = new Map<string, { pair: string; pnl: number; trades: number; spark: number[] }>();
   for (const t of trades) {
     const key = String(t.pair);

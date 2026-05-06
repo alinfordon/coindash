@@ -5,6 +5,7 @@ import { Settings } from "@/models/Settings";
 import { getSettings } from "@/lib/settings";
 import { fetchPortfolioValueUsdc, fetchPrice } from "@/lib/binance";
 import { startOfDayInTz } from "@/lib/utils";
+import { dashboardClosedTradeMatch } from "@/lib/dashboardTrades";
 
 export const dynamic = "force-dynamic";
 
@@ -25,10 +26,11 @@ export async function GET() {
   const tz = settings.displayTimezone || "Europe/Bucharest";
   const startOfToday = startOfDayInTz(new Date(), tz);
 
+  const closedMatch = dashboardClosedTradeMatch();
   const [openTrades, closedToday, allClosed] = await Promise.all([
     Trade.find({ status: "OPEN" }).lean(),
-    Trade.find({ status: "CLOSED", closedAt: { $gte: startOfToday } }).lean(),
-    Trade.find({ status: "CLOSED" }).lean(),
+    Trade.find({ ...closedMatch, closedAt: { $gte: startOfToday } }).lean(),
+    Trade.find(closedMatch).lean(),
   ]);
 
   // Unrealized P&L for open trades needs entry price → always derived from DB.
