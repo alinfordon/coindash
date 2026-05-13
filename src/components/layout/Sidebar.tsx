@@ -3,11 +3,23 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
-import { LayoutDashboard, CandlestickChart, History, LineChart, Settings, Cpu, Activity, LogOut, User } from "lucide-react";
+import {
+  LayoutDashboard,
+  CandlestickChart,
+  History,
+  LineChart,
+  Settings,
+  Cpu,
+  Activity,
+  LogOut,
+  User,
+  BarChart3,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const nav = [
   { href: "/dashboard", label: "Dashboard", short: "Home", icon: LayoutDashboard },
+  { href: "/dashboard/stats", label: "Statistics", short: "Stats", icon: BarChart3 },
   { href: "/positions", label: "Positions", short: "Pos", icon: Activity },
   { href: "/history", label: "History", short: "Log", icon: History },
   { href: "/analysis", label: "Analysis", short: "AI", icon: LineChart },
@@ -35,7 +47,10 @@ export function Sidebar() {
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
         {nav.map((n) => {
-          const active = pathname?.startsWith(n.href);
+          const active =
+            n.href === "/dashboard"
+              ? pathname === "/dashboard" || pathname === "/dashboard/"
+              : pathname?.startsWith(n.href);
           const Icon = n.icon;
           return (
             <Link
@@ -104,9 +119,12 @@ export function MobileNav() {
       className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-border/80 bg-surface/80 backdrop-blur-xl"
       style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
     >
-      <div className="grid grid-cols-5">
+      <div className="grid grid-cols-6">
         {nav.map((n) => {
-          const active = pathname?.startsWith(n.href);
+          const active =
+            n.href === "/dashboard"
+              ? pathname === "/dashboard" || pathname === "/dashboard/"
+              : pathname?.startsWith(n.href);
           const Icon = n.icon;
           return (
             <Link
