@@ -57,19 +57,27 @@ export function AnalyticsKpiStrip({ m }: { m: AnalyticsMetrics }) {
           accent="success"
         />
       </Tip>
-      <Tip text="Maximum peak-to-trough decline on the cumulative equity curve built from CLOSED trades (percentage vs trailing peak).">
+      <Tip text="Cea mai mare scădere peak→trough pe PnL realizat cumulat (per tranzacție închisă). Procentul = pierderea USDC / valoarea portofoliului Binance (live sau snapshot), nu față de vârful PnL care poate fi aproape zero.">
         <Stat
           label="Max Drawdown"
           value={<span className="mono text-loss">{fmtDd(m.maxDrawdownPct)}</span>}
-          sub={<span className="mono text-text-muted">{fmtUsd(-m.maxDrawdownUsd)} trough</span>}
+          sub={
+            <span className="mono text-text-muted">
+              {fmtUsd(-m.maxDrawdownUsd)} trough · vs {fmtUsd(m.portfolioDenominatorUsd)} NAV
+            </span>
+          }
           accent="danger"
         />
       </Tip>
-      <Tip text="Drawdown versus the latest equity peak using only CLOSED-trade cumulative equity.">
+      <Tip text="Drawdown curent față de ultimul vârf al PnL realizat. Procent raportat la NAV portofoliu.">
         <Stat
           label="Current DD"
           value={<span className={classOfPnl(-m.currentDrawdownUsd)}>{fmtDd(m.currentDrawdownPct)}</span>}
-          sub={<span className="mono text-text-muted">{fmtUsd(-m.currentDrawdownUsd)} off peak</span>}
+          sub={
+            <span className="mono text-text-muted">
+              {fmtUsd(-m.currentDrawdownUsd)} off peak · vs NAV
+            </span>
+          }
           accent={m.currentDrawdownPct > 15 ? "danger" : "secondary"}
         />
       </Tip>

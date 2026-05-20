@@ -112,3 +112,17 @@ export function trendDescription(vals: number[]): string {
   if (pct < -1) return "falling";
   return "sideways";
 }
+
+/** True when core 1h indicators are numeric (enough candle history). */
+export function isIndicatorSnapshotValid(snap: ReturnType<typeof computeIndicatorSnapshot>): boolean {
+  const n = (v: unknown) => typeof v === "number" && Number.isFinite(v);
+  return (
+    n(snap.price) &&
+    n(snap.rsi) &&
+    n(snap.macd.value) &&
+    n(snap.macd.signal) &&
+    n(snap.macd.histogram) &&
+    n(snap.ema20) &&
+    n(snap.ema50)
+  );
+}

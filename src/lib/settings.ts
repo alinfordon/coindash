@@ -19,6 +19,13 @@ export type RuntimeSettings = {
   maxOpenPairs: number;
   maxUsdcPerOrder: number;
   minConfidence: number;
+  entryGateEnabled: boolean;
+  minTechnicalScore: number;
+  requireStrongBuyOnly: boolean;
+  maxPump24hPct: number;
+  slCooldownMinutes: number;
+  tpReopenCooldownMinutes: number;
+  defaultReopenCooldownMinutes: number;
   stopLossPercent: number;
   takeProfitPercent: number;
   riskRewardRatio: number;

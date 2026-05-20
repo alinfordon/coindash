@@ -73,7 +73,7 @@ export function AnalyticsCharts({ report }: { report: AnalyticsReport }) {
           <Card>
             <CardHeader>
               <CardTitle>Drawdown Curve</CardTitle>
-              <span className="text-[10px] mono text-text-muted uppercase tracking-widest">vs trailing peak · closed trades</span>
+              <span className="text-[10px] mono text-text-muted uppercase tracking-widest">vs portofoliu NAV · bucket PnL</span>
             </CardHeader>
             <div className="h-72">
               {!dd.length ? (

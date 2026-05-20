@@ -54,8 +54,16 @@ export function OpenPositionsTable() {
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || "Failed");
       if (j.closedCount > 0) {
+        const parts = (j.closed || []) as { pair: string; closedReason?: string }[];
+        const tp = parts.filter((c) => c.closedReason === "TP_HIT").length;
+        const sl = parts.filter((c) => c.closedReason === "SL_HIT").length;
+        const other = j.closedCount - tp - sl;
+        const detail =
+          tp || sl
+            ? ` · ${tp ? `${tp} TP` : ""}${tp && sl ? ", " : ""}${sl ? `${sl} SL` : ""}${other ? `, ${other} sync` : ""}`
+            : "";
         toast.success(
-          `Auto-closed ${j.closedCount} dust position${j.closedCount > 1 ? "s" : ""}: ${j.closed.map((c: any) => c.pair).join(", ")}`,
+          `Synced ${j.closedCount} closed on exchange${detail}: ${parts.map((c) => c.pair).join(", ")}`,
           { id: "reconcile", duration: 8000 }
         );
       } else {
@@ -82,7 +90,7 @@ export function OpenPositionsTable() {
           >
             <Undo2 className="h-3 w-3" /> Restore
           </button>
-          <button className="btn py-1 px-2 text-[11px]" onClick={reconcile} title="Auto-close ghost/dust positions">
+          <button className="btn py-1 px-2 text-[11px]" onClick={reconcile} title="Sync DB with Binance — OCO fills become TP/SL, not RECONCILED">
             <Wand2 className="h-3 w-3" /> Reconcile
           </button>
         </div>

@@ -289,6 +289,53 @@ export default function SettingsPage() {
           </div>
           <div>
             <label className="text-[10px] mono uppercase tracking-widest text-text-muted">
+              Min Technical Score · <span className="text-primary">{form.minTechnicalScore ?? 40}</span>
+            </label>
+            <input
+              className="w-full mt-2 accent-primary"
+              type="range"
+              min={0}
+              max={100}
+              value={form.minTechnicalScore ?? 40}
+              onChange={(e) => set({ minTechnicalScore: +e.target.value })}
+            />
+          </div>
+          <Field
+            label="Max 24h pump % (skip FOMO)"
+            type="number"
+            min={5}
+            max={50}
+            value={form.maxPump24hPct ?? 15}
+            onChange={(v) => set({ maxPump24hPct: +v })}
+          />
+          <Field
+            label="SL cooldown (minutes)"
+            type="number"
+            min={0}
+            max={1440}
+            value={form.slCooldownMinutes ?? 120}
+            onChange={(v) => set({ slCooldownMinutes: +v })}
+          />
+          <Field
+            label="TP reopen cooldown (min)"
+            type="number"
+            min={0}
+            max={480}
+            value={form.tpReopenCooldownMinutes ?? 30}
+            onChange={(v) => set({ tpReopenCooldownMinutes: +v })}
+          />
+          <ToggleRow
+            label="Entry gate (balanced TA filters)"
+            active={form.entryGateEnabled ?? true}
+            onChange={(v) => set({ entryGateEnabled: v })}
+          />
+          <p className="md:col-span-3 text-[11px] text-text-muted mono leading-relaxed -mt-1">
+            Balanced: BUY/STRONG_BUY + score ≥ {form.minTechnicalScore ?? 40} (STRONG_BUY ≥{" "}
+            {Math.max(30, (form.minTechnicalScore ?? 40) - 10)}), price ≥ EMA20, MACD 1h ≥ 0, RSI 15m 35–70, no 15m
+            falling trend, skip 24h pump &gt; {form.maxPump24hPct ?? 15}%.
+          </p>
+          <div>
+            <label className="text-[10px] mono uppercase tracking-widest text-text-muted">
               Display Timezone
             </label>
             <select

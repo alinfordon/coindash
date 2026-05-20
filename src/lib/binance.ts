@@ -329,6 +329,42 @@ export async function cancelOco(symbol: string, orderListId: string | number, te
   return signedRequest<any>("DELETE", "/api/v3/orderList", { symbol, orderListId }, { testnet });
 }
 
+/** Query OCO list status (EXECUTING = active, ALL_DONE = fully filled or cancelled). */
+export async function getOcoOrderList(symbol: string, orderListId: string | number, testnet = true) {
+  return signedRequest<any>("GET", "/api/v3/orderList", { symbol, orderListId }, { testnet });
+}
+
+export async function getOrder(symbol: string, orderId: string | number, testnet = true) {
+  return signedRequest<any>("GET", "/api/v3/order", { symbol, orderId }, { testnet });
+}
+
+export type MyTradeRow = {
+  id: number;
+  price: number;
+  qty: number;
+  quoteQty: number;
+  time: number;
+  isBuyer: boolean;
+};
+
+export async function fetchMyTrades(
+  symbol: string,
+  opts: { startTime?: number; limit?: number; testnet?: boolean } = {}
+): Promise<MyTradeRow[]> {
+  const testnet = opts.testnet ?? (process.env.BINANCE_TESTNET || "true") === "true";
+  const params: Record<string, string | number> = { symbol, limit: opts.limit ?? 50 };
+  if (opts.startTime) params.startTime = opts.startTime;
+  const rows = await signedRequest<any[]>("GET", "/api/v3/myTrades", params, { testnet });
+  return (rows || []).map((r) => ({
+    id: r.id,
+    price: +r.price,
+    qty: +r.qty,
+    quoteQty: +r.quoteQty || 0,
+    time: r.time,
+    isBuyer: r.isBuyer,
+  }));
+}
+
 export async function fetchUsdcBalance(testnet = true): Promise<number> {
   try {
     const acc = await getAccount(testnet);

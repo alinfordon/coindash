@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/db";
 import { Trade } from "@/models/Trade";
+import { dashboardClosedTradeMatch } from "@/lib/dashboardTrades";
 
 export const dynamic = "force-dynamic";
 
@@ -12,21 +13,23 @@ export async function GET(req: Request) {
   const aiModel = searchParams.get("aiModel");
   const from = searchParams.get("from");
   const to = searchParams.get("to");
-  const page = Math.max(1, +(searchParams.get("page") || 1) || 1);
+  const closedReason = searchParams.get("closedReason");
   const limit = Math.min(Math.max(1, +(searchParams.get("limit") || 25) || 25), 100);
 
-  const q: any = { status: "CLOSED" };
+  const q: Record<string, unknown> = { ...dashboardClosedTradeMatch() };
   if (pair) q.pair = pair;
   if (aiModel) q.aiModel = aiModel;
   if (from || to) {
-    q.closedAt = {} as any;
-    if (from) q.closedAt.$gte = new Date(from);
-    if (to) q.closedAt.$lte = new Date(to);
+    const closedAt: Record<string, Date> = {};
+    if (from) closedAt.$gte = new Date(from + (from.includes("T") ? "" : "T00:00:00.000Z"));
+    if (to) closedAt.$lte = new Date(to + (to.includes("T") ? "" : "T23:59:59.999Z"));
+    q.closedAt = closedAt;
   }
   if (outcome === "profit") q.pnlUsdc = { $gt: 0 };
   if (outcome === "loss") q.pnlUsdc = { $lt: 0 };
+  if (closedReason) q.closedReason = closedReason;
 
-  const skip = (page - 1) * limit;
+  const page = Math.max(1, +(searchParams.get("page") || 1) || 1);
 
   const statsPipeline = [
     { $match: q },
@@ -38,13 +41,19 @@ export async function GET(req: Request) {
         lossCount: { $sum: { $cond: [{ $lt: ["$pnlUsdc", 0] }, 1, 0] } },
         sumWinPnl: { $sum: { $cond: [{ $gt: ["$pnlUsdc", 0] }, "$pnlUsdc", 0] } },
         sumLossPnl: { $sum: { $cond: [{ $lt: ["$pnlUsdc", 0] }, "$pnlUsdc", 0] } },
+        netPnl: { $sum: { $ifNull: ["$pnlUsdc", 0] } },
         largestWin: { $max: { $cond: [{ $gt: ["$pnlUsdc", 0] }, "$pnlUsdc", null] } },
         largestLoss: { $min: { $cond: [{ $lt: ["$pnlUsdc", 0] }, "$pnlUsdc", null] } },
         meanPct: { $avg: { $ifNull: ["$pnlPercent", 0] } },
         stdPct: { $stdDevPop: { $ifNull: ["$pnlPercent", 0] } },
+        reconciledCount: { $sum: { $cond: [{ $eq: ["$closedReason", "RECONCILED"] }, 1, 0] } },
+        tpCount: { $sum: { $cond: [{ $eq: ["$closedReason", "TP_HIT"] }, 1, 0] } },
+        slCount: { $sum: { $cond: [{ $eq: ["$closedReason", "SL_HIT"] }, 1, 0] } },
       },
     },
   ];
+
+  const skip = (page - 1) * limit;
 
   const [trades, statsAgg] = await Promise.all([
     Trade.find(q).sort({ closedAt: -1 }).skip(skip).limit(limit).lean(),
@@ -60,6 +69,7 @@ export async function GET(req: Request) {
   const avgLoss = lossCount ? (s!.sumLossPnl as number) / lossCount : 0;
   const largestWin = s?.largestWin ?? 0;
   const largestLoss = s?.largestLoss ?? 0;
+  const netPnl = s?.netPnl ?? 0;
   const stdPct = s?.stdPct ?? 0;
   const sharpe = stdPct > 0 ? ((s?.meanPct as number) || 0) / stdPct : 0;
 
@@ -70,12 +80,16 @@ export async function GET(req: Request) {
     pagination: { page, limit, total, totalPages },
     stats: {
       total,
+      netPnl: +Number(netPnl).toFixed(4),
       winRate: +winRate.toFixed(2),
       avgProfit: +avgProfit.toFixed(4),
       avgLoss: +avgLoss.toFixed(4),
       largestWin: +Number(largestWin || 0).toFixed(4),
       largestLoss: +Number(largestLoss || 0).toFixed(4),
       sharpe: +sharpe.toFixed(3),
+      reconciledCount: s?.reconciledCount ?? 0,
+      tpCount: s?.tpCount ?? 0,
+      slCount: s?.slCount ?? 0,
     },
   });
 }

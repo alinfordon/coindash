@@ -1,6 +1,6 @@
 import { connectDB } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
-import { fetchCandles, fetchPrice } from "@/lib/binance";
+import { fetchCandles, fetchPrice, getOcoOrderList } from "@/lib/binance";
 import { computeIndicatorSnapshot } from "@/lib/indicators";
 import { buildPositionCheckPrompt, callAI, safeParseJson } from "@/lib/ai";
 import { Trade } from "@/models/Trade";
@@ -38,6 +38,7 @@ export async function runPositionCron(opts: { manual?: boolean } = {}) {
   const closed: any[] = [];
 
   for (const t of trades) {
+    if (t.dryRun) continue;
     try {
       const price = await fetchPrice(t.pair as string, settings.binanceTestnet);
       const entry = t.entryPrice as number;
@@ -45,15 +46,27 @@ export async function runPositionCron(opts: { manual?: boolean } = {}) {
       const pnlUsdc = (price - entry) * qty;
       const pnlPct = ((price - entry) / entry) * 100;
 
-      if (t.takeProfit && price >= (t.takeProfit as number)) {
-        await closePosition(String(t._id), "TP_HIT", settings);
-        closed.push({ pair: t.pair, reason: "TP_HIT" });
-        continue;
+      let ocoExecuting = false;
+      if (t.ocoOrderId) {
+        try {
+          const list = await getOcoOrderList(t.pair as string, t.ocoOrderId as string, settings.binanceTestnet);
+          if (list.listOrderStatus === "EXECUTING") ocoExecuting = true;
+        } catch {
+          /* OCO may be purged; fall through to mark-based checks */
+        }
       }
-      if (t.stopLoss && price <= (t.stopLoss as number)) {
-        await closePosition(String(t._id), "SL_HIT", settings);
-        closed.push({ pair: t.pair, reason: "SL_HIT" });
-        continue;
+
+      if (!ocoExecuting) {
+        if (t.takeProfit && price >= (t.takeProfit as number)) {
+          await closePosition(String(t._id), "TP_HIT", settings);
+          closed.push({ pair: t.pair, reason: "TP_HIT" });
+          continue;
+        }
+        if (t.stopLoss && price <= (t.stopLoss as number)) {
+          await closePosition(String(t._id), "SL_HIT", settings);
+          closed.push({ pair: t.pair, reason: "SL_HIT" });
+          continue;
+        }
       }
 
       const candles = await fetchCandles(t.pair as string, "15m", 50, settings.binanceTestnet);

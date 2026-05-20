@@ -1,13 +1,19 @@
 import { connectDB } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
 import { topUsdcPairs, fetchCandles, fetch24h, fetchUsdcBalance, getSymbolInfo } from "@/lib/binance";
-import { computeIndicatorSnapshot } from "@/lib/indicators";
+import { computeIndicatorSnapshot, isIndicatorSnapshotValid } from "@/lib/indicators";
 import { buildAnalysisPrompt, callAI, safeParseJson } from "@/lib/ai";
 import { Analysis } from "@/models/Analysis";
 import { AILog } from "@/models/AILog";
 import { Trade } from "@/models/Trade";
 import { openPosition } from "@/lib/trading";
 import { isPairBlacklisted } from "@/lib/pairBlacklist";
+import {
+  compareBuyCandidates,
+  entryGateFromSettings,
+  passesEntryGate,
+  pairReopenBlocked,
+} from "@/lib/entryGate";
 
 const CONCURRENCY = 5;
 
@@ -66,10 +72,31 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
     dist[r] = (dist[r] || 0) + 1;
   }
 
+  const gate = entryGateFromSettings(settings);
+
   const buys = results.filter((a) => a && (a.recommendation === "BUY" || a.recommendation === "STRONG_BUY"));
-  const buysSorted = [...buys].sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
-  const bestBuy = buysSorted[0];
-  const candidates = buysSorted.filter((a) => (a.confidence ?? 0) >= settings.minConfidence);
+  const confidenceFiltered = buys.filter((a) => (a.confidence ?? 0) >= settings.minConfidence);
+  const gateSkipped: string[] = [];
+  const gated = confidenceFiltered.filter((a) => {
+    const r = passesEntryGate(
+      {
+        pair: a.pair,
+        recommendation: a.recommendation,
+        confidence: a.confidence ?? 0,
+        technicalScore: a.technicalScore ?? 0,
+        price: a.price,
+        indicators: a.indicators,
+      },
+      gate
+    );
+    if (!r.ok) {
+      gateSkipped.push(`${a.pair}: ${r.reason}`);
+      return false;
+    }
+    return true;
+  });
+  const candidates = [...gated].sort(compareBuyCandidates);
+  const bestBuy = candidates[0] ?? confidenceFiltered.sort(compareBuyCandidates)[0];
 
   // Capital check: how much USDC is actually free on Binance?
   // Only enforced in live mode. In dry run we skip the balance gate.
@@ -96,6 +123,11 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
     const already = await Trade.findOne({ pair: c.pair, status: "OPEN" });
     if (already) {
       skipped.push(`${c.pair}: already open`);
+      continue;
+    }
+    const cooldown = await pairReopenBlocked(c.pair, gate);
+    if (cooldown.blocked) {
+      skipped.push(`${c.pair}: ${cooldown.reason}`);
       continue;
     }
 
@@ -151,6 +183,8 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
   } else if (buys.length === 0) {
     const topHold = [...results].sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))[0];
     reason = `No BUY signals. Dist: STRONG_BUY=${dist.STRONG_BUY} BUY=${dist.BUY} HOLD=${dist.HOLD} SELL=${dist.SELL} STRONG_SELL=${dist.STRONG_SELL}. Top: ${topHold?.pair} ${topHold?.recommendation} ${topHold?.confidence}%`;
+  } else if (candidates.length === 0 && confidenceFiltered.length > 0) {
+    reason = `${confidenceFiltered.length} BUY cleared confidence but entry gate blocked all. Gate: ${gateSkipped.slice(0, 4).join(" | ")}`;
   } else if (candidates.length === 0) {
     reason = `${buys.length} BUY signal(s) but none cleared minConfidence=${settings.minConfidence}%. Best: ${bestBuy?.pair} ${bestBuy?.recommendation} ${bestBuy?.confidence}%`;
   } else if (remainingSlots <= 0 && openCount > 0) {
@@ -170,6 +204,7 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
       dist,
       buys: buys.length,
       candidates: candidates.length,
+      gateSkipped: gateSkipped.length,
       opened: opened.length,
       openCount,
       remainingSlotsBefore: settings.maxOpenPairs - openCount,
@@ -184,7 +219,9 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
     opened: opened.length,
     distribution: dist,
     buySignals: buys.length,
+    confidencePassed: confidenceFiltered.length,
     candidates: candidates.length,
+    gateSkipped,
     openCount,
     maxOpenPairs: settings.maxOpenPairs,
     minConfidence: settings.minConfidence,
@@ -203,7 +240,13 @@ async function analyzePair(symbol: string, settings: any) {
     fetch24h(symbol, settings.binanceTestnet),
   ]);
   const closes1h = c1h.map((c) => c.close);
+  const closes15m = c15m.map((c) => c.close);
   const snap = computeIndicatorSnapshot(closes1h);
+  const snap15 = computeIndicatorSnapshot(closes15m);
+
+  if (!isIndicatorSnapshotValid(snap)) {
+    throw new Error(`${symbol}: incomplete 1h indicators (need more candle history)`);
+  }
 
   const prompt = buildAnalysisPrompt({
     pair: symbol,
@@ -219,6 +262,10 @@ async function analyzePair(symbol: string, settings: any) {
     ema50: snap.ema50,
     priceVsEma20: snap.priceVsEma20Pct,
     priceVsEma50: snap.priceVsEma50Pct,
+    rsi15m: snap15.rsi,
+    macdHist15m: snap15.macd.histogram,
+    trend15m: snap15.trend5,
+    priceVsEma20_15m: snap15.priceVsEma20Pct,
     change24h: t24.priceChangePercent,
     volume24h: t24.quoteVolume,
     high24h: t24.highPrice,
@@ -234,6 +281,15 @@ async function analyzePair(symbol: string, settings: any) {
     keyFactors: string[];
     riskLevel: string;
   }>(ai.text);
+
+  if (!parsed) {
+    await AILog.create({
+      action: "ERROR",
+      pair: symbol,
+      reasoning: `AI JSON parse failed: ${ai.text.slice(0, 180)}`,
+      aiProvider: settings.aiProvider,
+    });
+  }
 
   const doc = {
     pair: symbol,
@@ -254,6 +310,9 @@ async function analyzePair(symbol: string, settings: any) {
       bb: snap.bb,
       ema20: snap.ema20,
       ema50: snap.ema50,
+      rsi15m: snap15.rsi,
+      macdHist15m: snap15.macd.histogram,
+      trend15m: snap15.trend5,
       volume24h: t24.quoteVolume,
       priceChange24h: t24.priceChangePercent,
       high24h: t24.highPrice,

@@ -15,7 +15,7 @@ const TradeSchema = new Schema(
     ocoOrderId: String,
     openedAt: { type: Date, default: Date.now },
     closedAt: Date,
-    closedReason: { type: String, enum: ["TP_HIT", "SL_HIT", "AI_DECISION", "MANUAL", null], default: null },
+    closedReason: { type: String, enum: ["TP_HIT", "SL_HIT", "AI_DECISION", "MANUAL", "RECONCILED", null], default: null },
     pnlUsdc: Number,
     pnlPercent: Number,
     aiProvider: String,

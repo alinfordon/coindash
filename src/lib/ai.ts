@@ -87,14 +87,29 @@ export function buildAnalysisPrompt(d: {
   ema50: number;
   priceVsEma20: number;
   priceVsEma50: number;
+  rsi15m?: number;
+  macdHist15m?: number;
+  trend15m?: string;
+  priceVsEma20_15m?: number;
   change24h: number;
   volume24h: number;
   high24h: number;
   low24h: number;
 }) {
+  const tf15 =
+    d.rsi15m != null
+      ? `
+TECHNICAL DATA (15M timeframe, last 100 candles — entry timing):
+RSI(14): ${num(d.rsi15m)}
+MACD histogram: ${num(d.macdHist15m)}
+Price vs EMA20: ${num(d.priceVsEma20_15m)}%
+Trend (last 5 candles): ${d.trend15m ?? "n/a"}
+`
+      : "";
+
   return `You are an expert crypto trading analyst. Analyze ${d.pair} and provide a trading recommendation.
 
-TECHNICAL DATA (1H timeframe, last 100 candles):
+TECHNICAL DATA (1H timeframe, last 100 candles — trend context):
 Current Price: ${d.price}
 RSI(14): ${num(d.rsi)}
 MACD: value=${num(d.macdValue)}, signal=${num(d.macdSignal)}, histogram=${num(d.macdHist)}
@@ -102,7 +117,7 @@ Bollinger Bands: upper=${num(d.bbUpper)}, middle=${num(d.bbMiddle)}, lower=${num
 EMA20: ${num(d.ema20)}, EMA50: ${num(d.ema50)}
 Price vs EMA20: ${num(d.priceVsEma20)}%
 Price vs EMA50: ${num(d.priceVsEma50)}%
-
+${tf15}
 MARKET DATA:
 24h Change: ${num(d.change24h)}%
 24h Volume: $${num(d.volume24h, 0)}

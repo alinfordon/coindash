@@ -210,7 +210,7 @@ export function sharpeRatio(dailyReturns: number[], riskFreeDaily = 0): number {
   return (mean / sd) * Math.sqrt(252);
 }
 
-/** Max drawdown % from equity peaks (equity curve starting at 0 = cumulative PnL). */
+/** Max drawdown USD from cumulative PnL peaks (per-trade or bucket series). */
 export function maxDrawdown(equitySeries: number[]): { pct: number; usd: number } {
   let peak = -Infinity;
   let maxDdUsd = 0;
@@ -226,6 +226,23 @@ export function maxDrawdown(equitySeries: number[]): { pct: number; usd: number 
     }
   }
   return { pct: maxDdPct, usd: maxDdUsd };
+}
+
+/** Cumulative realized PnL after each closed trade (chronological). */
+export function cumulativeEquityFromPnls(pnls: number[]): number[] {
+  let cum = 0;
+  const out: number[] = [];
+  for (const p of pnls) {
+    cum += p;
+    out.push(cum);
+  }
+  return out;
+}
+
+/** Drawdown % relative to portfolio NAV — interpretabil ca „cât din cont ai pierdut la maxim față de vârf”. */
+export function drawdownPercentVsNav(drawdownUsd: number, portfolioNavUsd: number, floorUsd = 10): number {
+  const nav = Math.max(Math.abs(portfolioNavUsd), floorUsd);
+  return (Math.max(0, drawdownUsd) / nav) * 100;
 }
 
 export function currentDrawdown(equitySeries: number[]): { pct: number; usd: number } {
@@ -641,13 +658,42 @@ export async function computeAnalyticsReport(filters: AnalyticsFilters): Promise
   const expectancyVal = expectancy(pnlsOrdered);
   const pf = profitFactorFromPnls(pnlsOrdered);
 
+  const settings = await getSettings();
+  const returnBasisFloorUsd = Math.max(10, Number(settings.maxUsdcPerOrder) || 50);
+
+  let portfolioDenominatorUsd = Number(settings.cashBalanceUsdc) || 0;
+  let portfolioDenominatorSource: "live" | "snapshot" = "snapshot";
+  try {
+    const pv = await fetchPortfolioValueUsdc(settings.binanceTestnet);
+    portfolioDenominatorUsd = pv.total;
+    portfolioDenominatorSource = "live";
+  } catch {
+    portfolioDenominatorUsd = Number(settings.cashBalanceUsdc) || 0;
+    portfolioDenominatorSource = "snapshot";
+  }
+
+  const portfolioSnapTs =
+    settings.cashBalanceUpdatedAt instanceof Date
+      ? settings.cashBalanceUpdatedAt.toISOString()
+      : settings.cashBalanceUpdatedAt
+        ? new Date(settings.cashBalanceUpdatedAt as string | number).toISOString()
+        : null;
+
+  const ddNavFloor = Math.max(returnBasisFloorUsd, portfolioDenominatorUsd);
+
+  const tradeEquitySeries = cumulativeEquityFromPnls(pnlsOrdered);
+  const { usd: maxDdUsd } = maxDrawdown(tradeEquitySeries.length ? tradeEquitySeries : [0]);
+  const curDd = currentDrawdown(tradeEquitySeries.length ? tradeEquitySeries : [0]);
+  const maxDdPct = drawdownPercentVsNav(maxDdUsd, ddNavFloor);
+  const curDdPct = drawdownPercentVsNav(curDd.usd, ddNavFloor);
+  const rf = recoveryFactor(totalNet, maxDdUsd);
+
   const buckets: BucketBarPoint[] = (f.buckets || []).map((row: any) => ({
     ts: row._id ? new Date(row._id).getTime() : 0,
     label: row._id ? labelBucket(new Date(row._id), filters.timeframe) : "",
     pnl: row.pnl ?? 0,
   }));
 
-  const equitySeries = (f.buckets || []).map((row: any) => row.equity ?? 0);
   const equityCurve: EquityPoint[] = (f.buckets || []).map((row: any) => ({
     ts: row._id ? new Date(row._id).getTime() : 0,
     label: row._id ? labelBucket(new Date(row._id), filters.timeframe) : "",
@@ -658,19 +704,14 @@ export async function computeAnalyticsReport(filters: AnalyticsFilters): Promise
   const drawdownCurve: DrawdownPoint[] = equityCurve.map((pt) => {
     if (pt.equity > peak) peak = pt.equity;
     const ddUsd = peak - pt.equity;
-    const denom = Math.max(Math.abs(peak), 1e-9);
     return {
       ts: pt.ts,
       label: pt.label,
-      ddPct: (ddUsd / denom) * 100,
+      ddPct: drawdownPercentVsNav(ddUsd, ddNavFloor),
       ddUsd,
       equity: pt.equity,
     };
   });
-
-  const { pct: maxDdPct, usd: maxDdUsd } = maxDrawdown(equitySeries);
-  const curDd = currentDrawdown(equitySeries);
-  const rf = recoveryFactor(totalNet, maxDdUsd);
 
   const dailyPnlsOnly = buckets.map((b) => b.pnl);
   const dailyRetObjs = dailyReturnsFromBuckets(dailyPnlsOnly, 0).map((o, i) => ({
@@ -739,9 +780,6 @@ export async function computeAnalyticsReport(filters: AnalyticsFilters): Promise
     };
   }
 
-  const settings = await getSettings();
-  const returnBasisFloorUsd = Math.max(10, Number(settings.maxUsdcPerOrder) || 50);
-
   const [equityBeforeWeek, equityBeforeMonthTz, equityBeforeYear, weekWin, monthWin, yearWin] = await Promise.all([
     aggregateSumClosedPnl({ ...baselineOnly, closedAt: { ...closedAtExists, $lt: weekStart } }),
     aggregateSumClosedPnl({ ...baselineOnly, closedAt: { ...closedAtExists, $lt: monthStartTz } }),
@@ -750,24 +788,6 @@ export async function computeAnalyticsReport(filters: AnalyticsFilters): Promise
     aggregatePeriodDeployedAndPnl(monthStartTz, upperMonth),
     aggregatePeriodDeployedAndPnl(yearStartTz, upperYear),
   ]);
-
-  let portfolioDenominatorUsd = Number(settings.cashBalanceUsdc) || 0;
-  let portfolioDenominatorSource: "live" | "snapshot" = "snapshot";
-  try {
-    const pv = await fetchPortfolioValueUsdc(settings.binanceTestnet);
-    portfolioDenominatorUsd = pv.total;
-    portfolioDenominatorSource = "live";
-  } catch {
-    portfolioDenominatorUsd = Number(settings.cashBalanceUsdc) || 0;
-    portfolioDenominatorSource = "snapshot";
-  }
-
-  const portfolioSnapTs =
-    settings.cashBalanceUpdatedAt instanceof Date
-      ? settings.cashBalanceUpdatedAt.toISOString()
-      : settings.cashBalanceUpdatedAt
-        ? new Date(settings.cashBalanceUpdatedAt as string | number).toISOString()
-        : null;
 
   const weeklyPortfolioRet = portfolioPeriodReturnPercent(weekWin.pnl, portfolioDenominatorUsd);
   const monthlyPortfolioRet = portfolioPeriodReturnPercent(monthWin.pnl, portfolioDenominatorUsd);
@@ -805,7 +825,7 @@ export async function computeAnalyticsReport(filters: AnalyticsFilters): Promise
     sharpeRatio: sharpe,
     maxDrawdownPct: maxDdPct,
     maxDrawdownUsd: maxDdUsd,
-    currentDrawdownPct: curDd.pct,
+    currentDrawdownPct: curDdPct,
     currentDrawdownUsd: curDd.usd,
     recoveryFactor: Number.isFinite(rf) ? rf : rf === Infinity ? 999 : 0,
     averageHoldingMinutes: sum.avgHold ?? averageHoldingTimeMinutes(dursOrdered),
