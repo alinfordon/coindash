@@ -7,6 +7,8 @@ import { normalizePairBlacklistEntries } from "./pairBlacklistCore";
 export type RuntimeSettings = {
   aiProvider: "claude" | "gemini" | "ollama";
   aiModel: string;
+  /** When set, analysis cron uses this model; position check keeps aiModel. */
+  analysisAiModel: string;
   aiApiKey: string;
   ollamaUrl: string;
   binanceApiKey: string;

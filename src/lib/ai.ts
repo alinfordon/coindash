@@ -11,10 +11,13 @@ export type AIResponse = {
   latencyMs: number;
 };
 
-export async function callAI(prompt: string, settings: RuntimeSettings): Promise<AIResponse> {
+export async function callAI(
+  prompt: string,
+  settings: RuntimeSettings,
+  opts: { role?: "default" | "analysis" } = {}
+): Promise<AIResponse> {
   const t = Date.now();
-  const provider = settings.aiProvider;
-  const model = settings.aiModel;
+  const { provider, model } = resolveAiProfile(settings, opts.role ?? "default");
 
   if (provider === "claude") {
     if (!settings.aiApiKey) throw new Error("Missing Anthropic API key");
@@ -53,6 +56,18 @@ export async function callAI(prompt: string, settings: RuntimeSettings): Promise
   }
 
   throw new Error(`Unknown AI provider: ${provider}`);
+}
+
+/** Model used for market scan vs position checks (same provider / API key). */
+export function resolveAiProfile(
+  settings: RuntimeSettings,
+  role: "default" | "analysis" = "default"
+): { provider: AIProvider; model: string } {
+  if (role === "analysis") {
+    const model = settings.analysisAiModel?.trim();
+    if (model) return { provider: settings.aiProvider, model };
+  }
+  return { provider: settings.aiProvider, model: settings.aiModel };
 }
 
 export function safeParseJson<T = any>(raw: string): T | null {

@@ -88,12 +88,16 @@ export default function SettingsPage() {
     }
   }
 
-  async function testAi() {
-    toast.loading("Testing AI provider…", { id: "test-ai" });
-    const r = await fetch("/api/settings/test-ai", { method: "POST", body: JSON.stringify(form) });
+  async function testAi(role: "default" | "analysis" = "default") {
+    const label = role === "analysis" ? "analysis model" : "position model";
+    toast.loading(`Testing ${label}…`, { id: "test-ai" });
+    const r = await fetch("/api/settings/test-ai", {
+      method: "POST",
+      body: JSON.stringify({ ...form, testRole: role }),
+    });
     const j = await r.json();
-    if (j.ok) toast.success(`AI OK · ${j.latencyMs}ms`, { id: "test-ai" });
-    else toast.error(`AI failed: ${j.error}`, { id: "test-ai" });
+    if (j.ok) toast.success(`${label} OK · ${j.model} · ${j.latencyMs}ms`, { id: "test-ai" });
+    else toast.error(`${label} failed: ${j.error}`, { id: "test-ai" });
   }
 
   async function testBinance() {
@@ -131,9 +135,14 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle>AI Configuration</CardTitle>
-          <button className="btn" onClick={testAi}>
-            <PlugZap className="h-4 w-4" /> Test Connection
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button className="btn" onClick={() => testAi("default")}>
+              <PlugZap className="h-4 w-4" /> Test position model
+            </button>
+            <button className="btn" onClick={() => testAi("analysis")}>
+              <PlugZap className="h-4 w-4" /> Test analysis model
+            </button>
+          </div>
         </CardHeader>
 
         <div className="grid grid-cols-3 gap-2 mb-4">
@@ -183,7 +192,7 @@ export default function SettingsPage() {
           )}
 
           <div>
-            <label className="text-[10px] mono uppercase tracking-widest text-text-muted">Model</label>
+            <label className="text-[10px] mono uppercase tracking-widest text-text-muted">Model · Position check</label>
             {form.aiProvider === "ollama" ? (
               <input
                 className="input mt-1"
@@ -200,6 +209,33 @@ export default function SettingsPage() {
                 ))}
               </select>
             )}
+            <p className="text-[10px] text-text-muted mono mt-1">Open positions · position cron</p>
+          </div>
+
+          <div>
+            <label className="text-[10px] mono uppercase tracking-widest text-text-muted">Model · Analysis cron</label>
+            {form.aiProvider === "ollama" ? (
+              <input
+                className="input mt-1"
+                value={form.analysisAiModel ?? ""}
+                onChange={(e) => set({ analysisAiModel: e.target.value })}
+                placeholder={`Same as default (${form.aiModel || "—"})`}
+              />
+            ) : (
+              <select
+                className="input mt-1"
+                value={form.analysisAiModel ?? ""}
+                onChange={(e) => set({ analysisAiModel: e.target.value })}
+              >
+                <option value="">Same as default ({form.aiModel || "—"})</option>
+                {MODELS[form.aiProvider as "claude" | "gemini"].map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            )}
+            <p className="text-[10px] text-text-muted mono mt-1">Market scan · trade entry signals</p>
           </div>
         </div>
       </Card>

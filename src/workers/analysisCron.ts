@@ -2,7 +2,7 @@ import { connectDB } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
 import { topUsdcPairs, fetchCandles, fetch24h, fetchUsdcBalance, getSymbolInfo } from "@/lib/binance";
 import { computeIndicatorSnapshot, isIndicatorSnapshotValid } from "@/lib/indicators";
-import { buildAnalysisPrompt, callAI, safeParseJson } from "@/lib/ai";
+import { buildAnalysisPrompt, callAI, resolveAiProfile, safeParseJson } from "@/lib/ai";
 import { Analysis } from "@/models/Analysis";
 import { AILog } from "@/models/AILog";
 import { Trade } from "@/models/Trade";
@@ -17,6 +17,56 @@ import {
 
 const CONCURRENCY = 5;
 
+async function hasCapitalForNewOrder(settings: Awaited<ReturnType<typeof getSettings>>): Promise<{
+  ok: boolean;
+  reason?: string;
+  freeUsdc?: number;
+}> {
+  if (settings.dryRun) return { ok: true };
+  try {
+    const freeUsdc = await fetchUsdcBalance(settings.binanceTestnet);
+    const required = settings.maxUsdcPerOrder;
+    if (freeUsdc + 1e-6 < required) {
+      return {
+        ok: false,
+        freeUsdc,
+        reason: `insufficient USDC (free=${freeUsdc.toFixed(2)}, need=${required.toFixed(2)}/order)`,
+      };
+    }
+    return { ok: true, freeUsdc };
+  } catch (e: any) {
+    return { ok: false, reason: `USDC balance check failed: ${e.message?.slice(0, 120)}` };
+  }
+}
+
+/** Scheduled cron only: skip scan when no room or no USDC for a new order. */
+async function scheduledAnalysisPreflight(settings: Awaited<ReturnType<typeof getSettings>>): Promise<
+  | { ok: true; openCount: number; freeUsdc?: number }
+  | { ok: false; decision: "NO_SLOTS" | "NO_CAPITAL"; reason: string; meta?: Record<string, unknown> }
+> {
+  const openCount = await Trade.countDocuments({ status: "OPEN" });
+  if (openCount >= settings.maxOpenPairs) {
+    return {
+      ok: false,
+      decision: "NO_SLOTS",
+      reason: `slot cap reached (${openCount}/${settings.maxOpenPairs} open)`,
+      meta: { openCount, maxOpenPairs: settings.maxOpenPairs },
+    };
+  }
+
+  const capital = await hasCapitalForNewOrder(settings);
+  if (!capital.ok) {
+    return {
+      ok: false,
+      decision: "NO_CAPITAL",
+      reason: capital.reason ?? "insufficient capital",
+      meta: { freeUsdc: capital.freeUsdc, maxUsdcPerOrder: settings.maxUsdcPerOrder, openCount },
+    };
+  }
+
+  return { ok: true, openCount, freeUsdc: capital.freeUsdc };
+}
+
 export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
   await connectDB();
   const settings = await getSettings();
@@ -29,6 +79,26 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
     if (!settings.analysisCronActive) {
       console.log("[analysisCron] skipped — analysis cron is disabled");
       return { skipped: true, reason: "analysis cron disabled" };
+    }
+  }
+
+  if (!opts.manual) {
+    const preflight = await scheduledAnalysisPreflight(settings);
+    if (preflight.ok === false) {
+      console.log(`[analysisCron] skipped — ${preflight.reason}`);
+      await AILog.create({
+        action: "CRON_END",
+        decision: preflight.decision,
+        reasoning: `Analysis skipped (scheduled): ${preflight.reason}`,
+        meta: preflight.meta,
+      });
+      return {
+        skipped: true,
+        reason: preflight.reason,
+        insufficientCapital: preflight.decision === "NO_CAPITAL",
+        slotCapReached: preflight.decision === "NO_SLOTS",
+        ...preflight.meta,
+      };
     }
   }
 
@@ -158,7 +228,7 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
         stopLossPct: settings.stopLossPercent,
         takeProfitPct: Math.max(settings.takeProfitPercent, settings.stopLossPercent * settings.riskRewardRatio),
         aiProvider: settings.aiProvider,
-        aiModel: settings.aiModel,
+        aiModel: resolveAiProfile(settings, "analysis").model,
         aiConfidence: c.confidence ?? 0,
         aiReasoning: c.reasoning ?? "",
         indicators: c.indicators,
@@ -272,7 +342,8 @@ async function analyzePair(symbol: string, settings: any) {
     low24h: t24.lowPrice,
   });
 
-  const ai = await callAI(prompt, settings);
+  const ai = await callAI(prompt, settings, { role: "analysis" });
+  const aiProfile = resolveAiProfile(settings, "analysis");
   const parsed = safeParseJson<{
     recommendation: string;
     confidence: number;
@@ -318,8 +389,8 @@ async function analyzePair(symbol: string, settings: any) {
       high24h: t24.highPrice,
       low24h: t24.lowPrice,
     },
-    aiProvider: settings.aiProvider,
-    aiModel: settings.aiModel,
+    aiProvider: aiProfile.provider,
+    aiModel: aiProfile.model,
     rawResponse: ai.text,
   };
 
@@ -330,7 +401,7 @@ async function analyzePair(symbol: string, settings: any) {
     decision: doc.recommendation,
     confidence: doc.confidence,
     reasoning: doc.reasoning,
-    aiProvider: settings.aiProvider,
+    aiProvider: aiProfile.provider,
   });
   return doc;
 }

@@ -4,6 +4,8 @@ const SettingsSchema = new Schema(
   {
     aiProvider: { type: String, enum: ["claude", "gemini", "ollama"], default: "claude" },
     aiModel: { type: String, default: "claude-sonnet-4-5" },
+    /** Empty = use aiModel. Used only by analysis cron (market scan). */
+    analysisAiModel: { type: String, default: "" },
     aiApiKey: { type: String, default: "" },
     ollamaUrl: { type: String, default: "http://localhost:11434" },
     binanceApiKey: { type: String, default: "" },
