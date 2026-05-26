@@ -10,7 +10,7 @@ import { normalizePairBlacklistEntries } from "@/lib/pairBlacklistCore";
 
 const MODELS = {
   claude: ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5","claude-sonnet-4-6"],
-  gemini: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"],
+  gemini: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite-preview"],
   ollama: ["llama3.2", "qwen3.5:397b-cloud", "qwen3.5"],
 };
 
