@@ -7,6 +7,7 @@ import { Trade } from "@/models/Trade";
 import { AILog } from "@/models/AILog";
 import { closePosition } from "@/lib/trading";
 import { reconcileOpenTrades } from "@/lib/reconciliation";
+import { resolveAnalysisIntervals } from "@/lib/analysisIntervals";
 
 export async function runPositionCron(opts: { manual?: boolean } = {}) {
   await connectDB();
@@ -34,6 +35,7 @@ export async function runPositionCron(opts: { manual?: boolean } = {}) {
     console.warn("[positionCron] reconcile pass failed:", e?.message || e);
   }
 
+  const { entry: entryInterval } = resolveAnalysisIntervals(settings);
   const trades = await Trade.find({ status: "OPEN" }).lean();
   const closed: any[] = [];
 
@@ -69,7 +71,7 @@ export async function runPositionCron(opts: { manual?: boolean } = {}) {
         }
       }
 
-      const candles = await fetchCandles(t.pair as string, "15m", 50, settings.binanceTestnet);
+      const candles = await fetchCandles(t.pair as string, entryInterval, 50, settings.binanceTestnet);
       const snap = computeIndicatorSnapshot(candles.map((c) => c.close));
       const durationMin = Math.floor((Date.now() - new Date(t.openedAt as Date).getTime()) / 60000);
 

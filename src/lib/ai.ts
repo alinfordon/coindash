@@ -1,8 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { RuntimeSettings } from "./settings";
+import { formatGeminiError, resolveGeminiModel } from "./aiModels";
 
-export type AIProvider = "claude" | "gemini" | "ollama";
+export type AIProvider = "claude" | "gemini" | "zai" | "ollama";
+
+const ZAI_DEFAULT_BASE = "https://api.z.ai/api/paas/v4";
 
 export type AIResponse = {
   text: string;
@@ -36,10 +39,48 @@ export async function callAI(
 
   if (provider === "gemini") {
     if (!settings.aiApiKey) throw new Error("Missing Google API key");
+    const { model: geminiModel, remappedFrom } = resolveGeminiModel(model);
     const g = new GoogleGenerativeAI(settings.aiApiKey);
-    const m = g.getGenerativeModel({ model });
-    const r = await m.generateContent(prompt);
-    const text = r.response.text();
+    const m = g.getGenerativeModel({ model: geminiModel });
+    try {
+      const r = await m.generateContent(prompt);
+      const text = r.response.text();
+      return {
+        text,
+        provider,
+        model: remappedFrom ? `${geminiModel} (was ${remappedFrom})` : geminiModel,
+        latencyMs: Date.now() - t,
+      };
+    } catch (e) {
+      throw new Error(formatGeminiError(remappedFrom ?? model, e));
+    }
+  }
+
+  if (provider === "zai") {
+    if (!settings.aiApiKey) throw new Error("Missing Z.AI API key");
+    const base = (settings.zaiBaseUrl || ZAI_DEFAULT_BASE).replace(/\/$/, "");
+    const res = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${settings.aiApiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 1024,
+        temperature: 0.7,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Z.AI ${res.status}: ${err.slice(0, 400)}`);
+    }
+    const data = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    const text = data.choices?.[0]?.message?.content?.trim() ?? "";
+    if (!text) throw new Error("Z.AI returned empty response");
     return { text, provider, model, latencyMs: Date.now() - t };
   }
 
@@ -70,6 +111,21 @@ export function resolveAiProfile(
   return { provider: settings.aiProvider, model: settings.aiModel };
 }
 
+/** Fail fast before scanning dozens of pairs. */
+export function assertAiReady(settings: RuntimeSettings, role: "default" | "analysis" = "analysis"): void {
+  const { provider, model } = resolveAiProfile(settings, role);
+  if (provider === "ollama") {
+    if (!settings.ollamaUrl?.trim()) throw new Error("Ollama URL is not configured in Settings");
+    if (!model?.trim()) throw new Error("Ollama model name is empty in Settings");
+    return;
+  }
+  if (!settings.aiApiKey?.trim()) {
+    const label = provider === "claude" ? "Anthropic" : provider === "gemini" ? "Google" : "Z.AI";
+    throw new Error(`Missing ${label} API key in Settings (AI provider: ${provider})`);
+  }
+  if (!model?.trim()) throw new Error(`AI model name is empty for provider ${provider}`);
+}
+
 export function safeParseJson<T = any>(raw: string): T | null {
   if (!raw) return null;
   // Strip code fences
@@ -90,6 +146,8 @@ export function safeParseJson<T = any>(raw: string): T | null {
 
 export function buildAnalysisPrompt(d: {
   pair: string;
+  trendInterval: string;
+  entryInterval?: string;
   price: number;
   rsi: number;
   macdValue: number;
@@ -102,29 +160,29 @@ export function buildAnalysisPrompt(d: {
   ema50: number;
   priceVsEma20: number;
   priceVsEma50: number;
-  rsi15m?: number;
-  macdHist15m?: number;
-  trend15m?: string;
-  priceVsEma20_15m?: number;
+  rsiEntry?: number;
+  macdHistEntry?: number;
+  trendEntry?: string;
+  priceVsEma20Entry?: number;
   change24h: number;
   volume24h: number;
   high24h: number;
   low24h: number;
 }) {
-  const tf15 =
-    d.rsi15m != null
+  const entryBlock =
+    d.rsiEntry != null
       ? `
-TECHNICAL DATA (15M timeframe, last 100 candles — entry timing):
-RSI(14): ${num(d.rsi15m)}
-MACD histogram: ${num(d.macdHist15m)}
-Price vs EMA20: ${num(d.priceVsEma20_15m)}%
-Trend (last 5 candles): ${d.trend15m ?? "n/a"}
+TECHNICAL DATA (${d.entryInterval?.toUpperCase() ?? "ENTRY"} timeframe, last 100 candles — entry timing):
+RSI(14): ${num(d.rsiEntry)}
+MACD histogram: ${num(d.macdHistEntry)}
+Price vs EMA20: ${num(d.priceVsEma20Entry)}%
+Trend (last 5 candles): ${d.trendEntry ?? "n/a"}
 `
       : "";
 
   return `You are an expert crypto trading analyst. Analyze ${d.pair} and provide a trading recommendation.
 
-TECHNICAL DATA (1H timeframe, last 100 candles — trend context):
+TECHNICAL DATA (${d.trendInterval.toUpperCase()} timeframe, last 100 candles — trend context):
 Current Price: ${d.price}
 RSI(14): ${num(d.rsi)}
 MACD: value=${num(d.macdValue)}, signal=${num(d.macdSignal)}, histogram=${num(d.macdHist)}
@@ -132,7 +190,7 @@ Bollinger Bands: upper=${num(d.bbUpper)}, middle=${num(d.bbMiddle)}, lower=${num
 EMA20: ${num(d.ema20)}, EMA50: ${num(d.ema50)}
 Price vs EMA20: ${num(d.priceVsEma20)}%
 Price vs EMA50: ${num(d.priceVsEma50)}%
-${tf15}
+${entryBlock}
 MARKET DATA:
 24h Change: ${num(d.change24h)}%
 24h Volume: $${num(d.volume24h, 0)}

@@ -2,12 +2,13 @@ import { connectDB } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
 import { topUsdcPairs, fetchCandles, fetch24h, fetchUsdcBalance, getSymbolInfo } from "@/lib/binance";
 import { computeIndicatorSnapshot, isIndicatorSnapshotValid } from "@/lib/indicators";
-import { buildAnalysisPrompt, callAI, resolveAiProfile, safeParseJson } from "@/lib/ai";
+import { buildAnalysisPrompt, callAI, resolveAiProfile, assertAiReady, safeParseJson } from "@/lib/ai";
 import { Analysis } from "@/models/Analysis";
 import { AILog } from "@/models/AILog";
 import { Trade } from "@/models/Trade";
 import { openPosition } from "@/lib/trading";
 import { isPairBlacklisted } from "@/lib/pairBlacklist";
+import { resolveAnalysisIntervals } from "@/lib/analysisIntervals";
 import {
   compareBuyCandidates,
   entryGateFromSettings,
@@ -104,19 +105,44 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
 
   await AILog.create({ action: "CRON_START", decision: "ANALYSIS", reasoning: "Market scan starting" });
 
+  try {
+    assertAiReady(settings, "analysis");
+  } catch (e: any) {
+    const msg = e?.message || "AI not configured";
+    await AILog.create({ action: "CRON_END", decision: "AI_CONFIG", reasoning: msg });
+    return { error: msg, analyzed: 0, opened: 0, reason: msg };
+  }
+
   let pairs: { symbol: string; priceChangePercent: number; quoteVolume: number; lastPrice: number; highPrice: number; lowPrice: number; volume: number }[] = [];
+  let pairsBeforeBlacklist = 0;
   try {
     const top = await topUsdcPairs(50, settings.binanceTestnet);
+    pairsBeforeBlacklist = top.length;
     pairs = top.filter((x) => !isPairBlacklisted(x.symbol, settings.pairBlacklist));
   } catch (e: any) {
     await AILog.create({ action: "ERROR", reasoning: `topUsdcPairs: ${e.message}` });
     return { error: e.message };
   }
 
+  if (pairs.length === 0) {
+    const reason = pairsBeforeBlacklist
+      ? `All ${pairsBeforeBlacklist} volume-qualified pairs are blacklisted — check Settings → Pair blacklist`
+      : settings.binanceTestnet
+      ? "No USDC pairs on Binance testnet passed volume filter — check network or try live mode"
+      : "No USDC pairs matched volume filter (Binance / network?)";
+    await AILog.create({
+      action: "CRON_END",
+      decision: "NO_PAIRS",
+      reasoning: reason,
+      meta: { pairsBeforeBlacklist, testnet: settings.binanceTestnet },
+    });
+    return { analyzed: 0, opened: 0, pairsQueued: 0, reason };
+  }
+
   const results: any[] = [];
+  const analyzeErrors: string[] = [];
   const queue = [...pairs];
-  const workers = Array.from({ length: CONCURRENCY }, () => workerLoop());
-  await Promise.all(workers);
+
   async function workerLoop() {
     while (queue.length) {
       const p = queue.shift();
@@ -125,10 +151,15 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
         const analysis = await analyzePair(p.symbol, settings);
         results.push(analysis);
       } catch (e: any) {
+        const msg = `${p.symbol}: ${e.message?.slice(0, 160) || "unknown error"}`;
+        analyzeErrors.push(msg);
         await AILog.create({ action: "ERROR", pair: p.symbol, reasoning: e.message?.slice(0, 200) });
       }
     }
   }
+
+  const aiConcurrency = settings.aiProvider === "ollama" ? CONCURRENCY : 2;
+  await Promise.all(Array.from({ length: aiConcurrency }, () => workerLoop()));
 
   // Trade decision pass
   const opened: any[] = [];
@@ -249,7 +280,10 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
     reason = `Opened ${opened.length}/${candidates.length} candidate(s)`;
     if (insufficientCapital) reason += ` — stopped early, insufficient USDC (${remainingUsdc.toFixed(2)} left)`;
   } else if (results.length === 0) {
-    reason = "No pairs analyzed (Binance / network?)";
+    const sample = analyzeErrors.slice(0, 3).join(" | ");
+    reason = sample
+      ? `0/${pairs.length} pairs analyzed — ${sample}`
+      : `0/${pairs.length} pairs analyzed (unknown errors — check AI Logs)`;
   } else if (buys.length === 0) {
     const topHold = [...results].sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))[0];
     reason = `No BUY signals. Dist: STRONG_BUY=${dist.STRONG_BUY} BUY=${dist.BUY} HOLD=${dist.HOLD} SELL=${dist.SELL} STRONG_SELL=${dist.STRONG_SELL}. Top: ${topHold?.pair} ${topHold?.recommendation} ${topHold?.confidence}%`;
@@ -271,6 +305,8 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
     reasoning: reason,
     meta: {
       analyzed: results.length,
+      pairsQueued: pairs.length,
+      analyzeErrors: analyzeErrors.length,
       dist,
       buys: buys.length,
       candidates: candidates.length,
@@ -286,6 +322,8 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
 
   return {
     analyzed: results.length,
+    pairsQueued: pairs.length,
+    analyzeErrors: analyzeErrors.slice(0, 8),
     opened: opened.length,
     distribution: dist,
     buySignals: buys.length,
@@ -303,23 +341,26 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
   };
 }
 
-async function analyzePair(symbol: string, settings: any) {
-  const [c1h, c15m, t24] = await Promise.all([
-    fetchCandles(symbol, "1h", 100, settings.binanceTestnet),
-    fetchCandles(symbol, "15m", 100, settings.binanceTestnet),
+async function analyzePair(symbol: string, settings: Awaited<ReturnType<typeof getSettings>>) {
+  const { trend, entry } = resolveAnalysisIntervals(settings);
+  const [cTrend, cEntry, t24] = await Promise.all([
+    fetchCandles(symbol, trend, 100, settings.binanceTestnet),
+    fetchCandles(symbol, entry, 100, settings.binanceTestnet),
     fetch24h(symbol, settings.binanceTestnet),
   ]);
-  const closes1h = c1h.map((c) => c.close);
-  const closes15m = c15m.map((c) => c.close);
-  const snap = computeIndicatorSnapshot(closes1h);
-  const snap15 = computeIndicatorSnapshot(closes15m);
+  const closesTrend = cTrend.map((c) => c.close);
+  const closesEntry = cEntry.map((c) => c.close);
+  const snap = computeIndicatorSnapshot(closesTrend);
+  const snapEntry = computeIndicatorSnapshot(closesEntry);
 
   if (!isIndicatorSnapshotValid(snap)) {
-    throw new Error(`${symbol}: incomplete 1h indicators (need more candle history)`);
+    throw new Error(`${symbol}: incomplete ${trend} indicators (need more candle history)`);
   }
 
   const prompt = buildAnalysisPrompt({
     pair: symbol,
+    trendInterval: trend,
+    entryInterval: entry,
     price: snap.price,
     rsi: snap.rsi,
     macdValue: snap.macd.value,
@@ -332,10 +373,10 @@ async function analyzePair(symbol: string, settings: any) {
     ema50: snap.ema50,
     priceVsEma20: snap.priceVsEma20Pct,
     priceVsEma50: snap.priceVsEma50Pct,
-    rsi15m: snap15.rsi,
-    macdHist15m: snap15.macd.histogram,
-    trend15m: snap15.trend5,
-    priceVsEma20_15m: snap15.priceVsEma20Pct,
+    rsiEntry: snapEntry.rsi,
+    macdHistEntry: snapEntry.macd.histogram,
+    trendEntry: snapEntry.trend5,
+    priceVsEma20Entry: snapEntry.priceVsEma20Pct,
     change24h: t24.priceChangePercent,
     volume24h: t24.quoteVolume,
     high24h: t24.highPrice,
@@ -365,7 +406,8 @@ async function analyzePair(symbol: string, settings: any) {
   const doc = {
     pair: symbol,
     analyzedAt: new Date(),
-    interval: "1h",
+    interval: trend,
+    entryInterval: entry,
     technicalScore: parsed?.technicalScore ?? 0,
     fundamentalScore: 0,
     combinedScore: parsed?.technicalScore ?? 0,
@@ -381,9 +423,11 @@ async function analyzePair(symbol: string, settings: any) {
       bb: snap.bb,
       ema20: snap.ema20,
       ema50: snap.ema50,
-      rsi15m: snap15.rsi,
-      macdHist15m: snap15.macd.histogram,
-      trend15m: snap15.trend5,
+      trendInterval: trend,
+      entryInterval: entry,
+      rsi15m: snapEntry.rsi,
+      macdHist15m: snapEntry.macd.histogram,
+      trend15m: snapEntry.trend5,
       volume24h: t24.quoteVolume,
       priceChange24h: t24.priceChangePercent,
       high24h: t24.highPrice,

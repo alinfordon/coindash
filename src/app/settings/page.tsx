@@ -1,18 +1,45 @@
 "use client";
 
 import useSWR from "swr";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
-import { AlertTriangle, Save, PlugZap, Zap, Pause, Ban, Plus, X } from "lucide-react";
+import { AlertTriangle, Save, PlugZap, Zap, Pause, Ban, Plus, X, HelpCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { normalizePairBlacklistEntries } from "@/lib/pairBlacklistCore";
+import {
+  ANALYSIS_INTERVAL_OPTIONS,
+  intervalRank,
+  normalizeAnalysisInterval,
+  normalizeAnalysisIntervalPair,
+} from "@/lib/analysisIntervals";
+import { GEMINI_MODELS, geminiModelMigrationPatch } from "@/lib/aiModels";
 
 const MODELS = {
-  claude: ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5","claude-sonnet-4-6"],
-  gemini: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite-preview"],
+  claude: ["claude-opus-4-5", "claude-opus-4-8", "claude-sonnet-4-5", "claude-haiku-4-5", "claude-sonnet-4-6"],
+  gemini: [...GEMINI_MODELS],
+  zai: ["glm-4.5-air", "glm-4.7", "glm-4.7-flash", "glm-5", "glm-5-turbo", "glm-5.1"],
   ollama: ["llama3.2", "qwen3.5:397b-cloud", "qwen3.5"],
-};
+} as const;
+
+type AiProviderId = keyof typeof MODELS;
+
+const AI_PROVIDERS: AiProviderId[] = ["claude", "gemini", "zai", "ollama"];
+
+function providerSubtitle(p: AiProviderId): string {
+  if (p === "claude") return "Anthropic Claude";
+  if (p === "gemini") return "Google Gemini";
+  if (p === "zai") return "Z.AI · GLM";
+  return "Local (Ollama)";
+}
+
+function apiKeyLabel(provider: string): string {
+  if (provider === "claude") return "Anthropic API Key";
+  if (provider === "gemini") return "Google API Key";
+  if (provider === "zai") return "Z.AI API Key";
+  return "API Key";
+}
 
 const TIMEZONES = [
   "Europe/Bucharest",
@@ -28,6 +55,69 @@ const TIMEZONES = [
   "Asia/Dubai",
 ];
 
+const SETTING_TIPS: Record<string, string> = {
+  aiProviderClaude:
+    "Folosește API-ul Anthropic (Claude). Același API key pentru analiză și verificarea pozițiilor.",
+  aiProviderGemini:
+    "Folosește Google Gemini. Potrivit pentru cost redus; poți seta un model mai puternic doar pentru Analysis Cron.",
+  aiProviderOllama:
+    "Rulează modele local via Ollama. Fără cost API cloud; necesită serverul Ollama pornit.",
+  aiProviderZai:
+    "Z.AI (GLM) — API compatibil OpenAI. Cheie de la z.ai. glm-4.5-air e rapid; glm-5.1 / glm-5-turbo pentru analize complexe.",
+  zaiBaseUrl:
+    "Endpoint Z.AI OpenAI-compatible. General: https://api.z.ai/api/paas/v4 — Coding Plan: https://api.z.ai/api/coding/paas/v4",
+  aiApiKey: "Cheia API a providerului selectat. Stocată criptat; nu se trimite la client după salvare.",
+  ollamaUrl: "URL-ul serverului Ollama (ex. http://localhost:11434).",
+  aiModelPosition:
+    "Modelul AI pentru Position Cron (la ~5 min): evaluează poziții deschise — HOLD sau SELL_NOW. Recomandat model rapid/ieftin.",
+  aiModelAnalysis:
+    "Modelul AI pentru Analysis Cron (la ~15 min): scan piață + semnale BUY. Gol = același ca Position. Recomandat model mai capabil.",
+  analysisTrendInterval:
+    "Timeframe principal pentru indicatori (EMA, MACD, Bollinger) trimiși la AI. Definește trendul — ex. 1h swing, 4h position.",
+  analysisEntryInterval:
+    "Timeframe scurt pentru timing intrare (RSI, trend). Folosit și la Position Cron. Trebuie ≤ timeframe trend.",
+  pilotActive:
+    "Comutator master: OFF oprește toate cron-urile automate (analiză + verificare poziții). Nu închide poziții existente.",
+  positionCheckCronActive:
+    "La fiecare ~5 minute verifică TP/SL, reconcile cu Binance și poate închide poziții via AI dacă confidence ≥ 80%.",
+  analysisCronActive:
+    "La fiecare ~15 minute scanează top perechi USDC, calculează TA, întreabă AI-ul și poate deschide poziții noi.",
+  dryRun:
+    "Simulare: calculează semnale și salvează în DB fără ordine reale pe Binance. Util pentru testare.",
+  maxOpenPairs:
+    "Număr maxim de poziții LONG deschise simultan. Limită de expunere și diversificare.",
+  maxUsdcPerOrder:
+    "USDC alocat per ordin MARKET BUY. Analysis Cron nu rulează (programat) dacă USDC liber < această valoare.",
+  stopLossPercent:
+    "Distanța SL sub prețul de intrare (%). Binance plasează OCO cu acest stop la deschidere.",
+  riskRewardRatio:
+    "Raport risc/recompensă: TP minim = SL × acest raport. Modifică automat Take Profit când îl schimbi.",
+  takeProfitPercent:
+    "Distanța TP deasupra intrării (%). Efectiv: max(takeProfitPercent, SL × riskRewardRatio).",
+  minConfidence:
+    "Prag minim confidence de la AI (0–100) ca un semnal BUY/STRONG_BUY să fie luat în considerare pentru deschidere.",
+  minTechnicalScore:
+    "Scor tehnic minim (-100…100) din răspunsul AI. Entry gate folosește și filtre locale (EMA, RSI, MACD).",
+  maxPump24hPct:
+    "Blochează intrări dacă perechea a urcat peste X% în 24h — evită cumpărarea în vârf (FOMO).",
+  slCooldownMinutes:
+    "După închidere cu SL_HIT, aceeași pereche nu poate fi redeschisă automat în acest interval.",
+  tpReopenCooldownMinutes:
+    "După TP_HIT, pauză mai scurtă înainte de a permite din nou deschiderea pe aceeași pereche.",
+  entryGateEnabled:
+    "Filtre tehnice locale înainte de open: trend EMA/MACD, RSI pe entry TF, fără trend falling, anti-pump.",
+  displayTimezone:
+    "Fus orar pentru „azi” în dashboard (ex. Today P&L) și rapoarte calendar.",
+  pairBlacklist:
+    "Perechi excluse din Analysis Cron (nu se deschid automat). Nu închide poziții deja deschise.",
+  binanceApiKey: "Cheia API Binance cu permisiuni de citire + trading SPOT. Stocată criptat.",
+  binanceApiSecret: "Secretul API Binance. Nu se afișează după salvare.",
+  binanceTestnet:
+    "ON = Binance Testnet (fără bani reali). OFF = cont live — ordine reale.",
+  telegramBotToken: "Token de la @BotFather pentru notificări deschideri/închideri.",
+  telegramChatId: "ID-ul chat-ului sau canalului unde primești alertele botului.",
+};
+
 export default function SettingsPage() {
   const { data, mutate } = useSWR<any>("/api/settings");
   const [form, setForm] = useState<any>(null);
@@ -41,6 +131,20 @@ export default function SettingsPage() {
         ...data,
         pairBlacklist: normalizePairBlacklistEntries(data.pairBlacklist),
       };
+      const geminiPatch = geminiModelMigrationPatch(
+        next.aiProvider,
+        next.aiModel,
+        next.analysisAiModel
+      );
+      if (geminiPatch) {
+        Object.assign(next, geminiPatch);
+        toast.info(
+          `Gemini model updated: ${Object.entries(geminiPatch)
+            .map(([k, v]) => `${k} → ${v}`)
+            .join(", ")}. Save to persist.`,
+          { duration: 8000 }
+        );
+      }
       setForm(next);
     }
   }, [data, form]);
@@ -113,6 +217,7 @@ export default function SettingsPage() {
   }
 
   return (
+    <TooltipProvider delayDuration={200}>
     <div className="space-y-6 max-w-5xl">
       <div className="flex items-end justify-between">
         <div>
@@ -145,44 +250,63 @@ export default function SettingsPage() {
           </div>
         </CardHeader>
 
-        <div className="grid grid-cols-3 gap-2 mb-4">
-          {(["claude", "gemini", "ollama"] as const).map((p) => (
-            <button
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
+          {AI_PROVIDERS.map((p) => (
+            <SettingTip
               key={p}
-              onClick={() => set({ aiProvider: p, aiModel: MODELS[p][0] || form.aiModel })}
-              className={cn(
-                "rounded-xl border p-4 text-left transition",
-                form.aiProvider === p
-                  ? "border-primary/50 bg-primary/10 shadow-neon"
-                  : "border-border bg-surface-2/30 hover:border-primary/30"
-              )}
+              tip={
+                p === "claude"
+                  ? SETTING_TIPS.aiProviderClaude
+                  : p === "gemini"
+                  ? SETTING_TIPS.aiProviderGemini
+                  : p === "zai"
+                  ? SETTING_TIPS.aiProviderZai
+                  : SETTING_TIPS.aiProviderOllama
+              }
             >
-              <div className="font-heading text-sm tracking-wider uppercase">{p}</div>
-              <div className="text-[11px] text-text-muted mt-1 mono">
-                {p === "claude" ? "Anthropic Claude 4.5" : p === "gemini" ? "Google Gemini 2.0" : "Local (Ollama)"}
-              </div>
-            </button>
+              <button
+                onClick={() => set({ aiProvider: p, aiModel: MODELS[p][0] || form.aiModel })}
+                className={cn(
+                  "rounded-xl border p-4 text-left transition w-full",
+                  form.aiProvider === p
+                    ? "border-primary/50 bg-primary/10 shadow-neon"
+                    : "border-border bg-surface-2/30 hover:border-primary/30"
+                )}
+              >
+                <div className="font-heading text-sm tracking-wider uppercase">{p === "zai" ? "Z.AI" : p}</div>
+                <div className="text-[11px] text-text-muted mt-1 mono">{providerSubtitle(p)}</div>
+              </button>
+            </SettingTip>
           ))}
         </div>
 
         <div className="grid md:grid-cols-2 gap-4">
           {form.aiProvider !== "ollama" && (
             <div>
-              <label className="text-[10px] mono uppercase tracking-widest text-text-muted">
-                {form.aiProvider === "claude" ? "Anthropic API Key" : "Google API Key"}
-              </label>
+              <SettingLabel tip={SETTING_TIPS.aiApiKey} label={apiKeyLabel(form.aiProvider)} />
               <input
                 className="input mt-1"
                 type="password"
                 value={form.aiApiKey || ""}
                 onChange={(e) => set({ aiApiKey: e.target.value })}
-                placeholder="sk-ant-..."
+                placeholder={form.aiProvider === "zai" ? "Z.AI API key" : "sk-ant-..."}
+              />
+            </div>
+          )}
+          {form.aiProvider === "zai" && (
+            <div>
+              <SettingLabel tip={SETTING_TIPS.zaiBaseUrl} label="Z.AI Base URL" />
+              <input
+                className="input mt-1 mono text-xs"
+                value={form.zaiBaseUrl ?? "https://api.z.ai/api/paas/v4"}
+                onChange={(e) => set({ zaiBaseUrl: e.target.value })}
+                placeholder="https://api.z.ai/api/paas/v4"
               />
             </div>
           )}
           {form.aiProvider === "ollama" && (
             <div>
-              <label className="text-[10px] mono uppercase tracking-widest text-text-muted">Ollama URL</label>
+              <SettingLabel tip={SETTING_TIPS.ollamaUrl} label="Ollama URL" />
               <input
                 className="input mt-1"
                 value={form.ollamaUrl || ""}
@@ -192,7 +316,7 @@ export default function SettingsPage() {
           )}
 
           <div>
-            <label className="text-[10px] mono uppercase tracking-widest text-text-muted">Model · Position check</label>
+            <SettingLabel tip={SETTING_TIPS.aiModelPosition} label="Model · Position check" />
             {form.aiProvider === "ollama" ? (
               <input
                 className="input mt-1"
@@ -202,7 +326,7 @@ export default function SettingsPage() {
               />
             ) : (
               <select className="input mt-1" value={form.aiModel || ""} onChange={(e) => set({ aiModel: e.target.value })}>
-                {MODELS[form.aiProvider as "claude" | "gemini"].map((m) => (
+                {MODELS[form.aiProvider as AiProviderId]?.map((m) => (
                   <option key={m} value={m}>
                     {m}
                   </option>
@@ -213,7 +337,7 @@ export default function SettingsPage() {
           </div>
 
           <div>
-            <label className="text-[10px] mono uppercase tracking-widest text-text-muted">Model · Analysis cron</label>
+            <SettingLabel tip={SETTING_TIPS.aiModelAnalysis} label="Model · Analysis cron" />
             {form.aiProvider === "ollama" ? (
               <input
                 className="input mt-1"
@@ -228,7 +352,7 @@ export default function SettingsPage() {
                 onChange={(e) => set({ analysisAiModel: e.target.value })}
               >
                 <option value="">Same as default ({form.aiModel || "—"})</option>
-                {MODELS[form.aiProvider as "claude" | "gemini"].map((m) => (
+                {MODELS[form.aiProvider as AiProviderId]?.map((m) => (
                   <option key={m} value={m}>
                     {m}
                   </option>
@@ -237,7 +361,53 @@ export default function SettingsPage() {
             )}
             <p className="text-[10px] text-text-muted mono mt-1">Market scan · trade entry signals</p>
           </div>
+
+          <div>
+            <SettingLabel tip={SETTING_TIPS.analysisTrendInterval} label="Timeframe · Trend (TA)" />
+            <select
+              className="input mt-1"
+              value={form.analysisTrendInterval ?? "1h"}
+              onChange={(e) => {
+                const trend = normalizeAnalysisInterval(e.target.value, "1h");
+                const { entry } = normalizeAnalysisIntervalPair(trend, form.analysisEntryInterval);
+                set({ analysisTrendInterval: trend, analysisEntryInterval: entry });
+              }}
+            >
+              {ANALYSIS_INTERVAL_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <p className="text-[10px] text-text-muted mono mt-1">Context: EMA, MACD, Bollinger (100 candles)</p>
+          </div>
+
+          <div>
+            <SettingLabel tip={SETTING_TIPS.analysisEntryInterval} label="Timeframe · Entry (TA)" />
+            <select
+              className="input mt-1"
+              value={form.analysisEntryInterval ?? "15m"}
+              onChange={(e) =>
+                set({
+                  analysisEntryInterval: normalizeAnalysisInterval(e.target.value, "15m"),
+                })
+              }
+            >
+              {ANALYSIS_INTERVAL_OPTIONS.filter(
+                (o) =>
+                  intervalRank(o.value) <= intervalRank(normalizeAnalysisInterval(form.analysisTrendInterval, "1h"))
+              ).map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <p className="text-[10px] text-text-muted mono mt-1">Timing: RSI, short trend · also used by position cron</p>
+          </div>
         </div>
+        <p className="text-[11px] text-text-muted mono mt-3 leading-relaxed">
+          Binance intervals: 1m … 3d (no 4d). Entry timeframe must be ≤ trend timeframe.
+        </p>
       </Card>
 
       {/* Trading Controls */}
@@ -247,26 +417,34 @@ export default function SettingsPage() {
         </CardHeader>
 
         <div className="flex items-center justify-between rounded-xl border border-border/60 bg-surface-2/30 p-4 mb-4">
-          <div>
-            <div className="font-heading text-base">AI Pilot</div>
-            <div className="text-xs text-text-muted mono">Master switch · stops/starts all cron activity</div>
-          </div>
+          <SettingTip tip={SETTING_TIPS.pilotActive}>
+            <div className="cursor-help">
+              <div className="font-heading text-base inline-flex items-center gap-1.5">
+                AI Pilot
+                <HelpCircle className="h-3.5 w-3.5 text-text-muted" />
+              </div>
+              <div className="text-xs text-text-muted mono">Master switch · stops/starts all cron activity</div>
+            </div>
+          </SettingTip>
           <BigToggle active={!!form.pilotActive} onChange={(v) => set({ pilotActive: v })} />
         </div>
 
         <div className="grid md:grid-cols-2 gap-3 mb-4">
           <ToggleRow
             label="5-min Position Check Cron"
+            tip={SETTING_TIPS.positionCheckCronActive}
             active={!!form.positionCheckCronActive}
             onChange={(v) => set({ positionCheckCronActive: v })}
           />
           <ToggleRow
             label="15-min Analysis Cron"
+            tip={SETTING_TIPS.analysisCronActive}
             active={!!form.analysisCronActive}
             onChange={(v) => set({ analysisCronActive: v })}
           />
           <ToggleRow
             label="Dry Run Mode (no real orders)"
+            tip={SETTING_TIPS.dryRun}
             active={!!form.dryRun}
             onChange={(v) => set({ dryRun: v })}
           />
@@ -275,6 +453,7 @@ export default function SettingsPage() {
         <div className="grid md:grid-cols-3 gap-4">
           <Field
             label="Max Open Pairs"
+            tip={SETTING_TIPS.maxOpenPairs}
             type="number"
             min={1}
             max={20}
@@ -283,6 +462,7 @@ export default function SettingsPage() {
           />
           <Field
             label="Max USDC per Order"
+            tip={SETTING_TIPS.maxUsdcPerOrder}
             type="number"
             min={10}
             max={1000}
@@ -291,6 +471,7 @@ export default function SettingsPage() {
           />
           <Field
             label="Stop Loss %"
+            tip={SETTING_TIPS.stopLossPercent}
             type="number"
             step={0.1}
             value={form.stopLossPercent}
@@ -298,6 +479,7 @@ export default function SettingsPage() {
           />
           <Field
             label="Risk / Reward Ratio"
+            tip={SETTING_TIPS.riskRewardRatio}
             type="number"
             step={0.1}
             value={form.riskRewardRatio}
@@ -305,15 +487,21 @@ export default function SettingsPage() {
           />
           <Field
             label="Take Profit %"
+            tip={SETTING_TIPS.takeProfitPercent}
             type="number"
             step={0.1}
             value={form.takeProfitPercent}
             onChange={(v) => set({ takeProfitPercent: +v })}
           />
           <div>
-            <label className="text-[10px] mono uppercase tracking-widest text-text-muted">
-              Min AI Confidence · <span className="text-primary">{form.minConfidence}%</span>
-            </label>
+            <SettingLabel
+              tip={SETTING_TIPS.minConfidence}
+              label={
+                <>
+                  Min AI Confidence · <span className="text-primary">{form.minConfidence}%</span>
+                </>
+              }
+            />
             <input
               className="w-full mt-2 accent-primary"
               type="range"
@@ -324,9 +512,14 @@ export default function SettingsPage() {
             />
           </div>
           <div>
-            <label className="text-[10px] mono uppercase tracking-widest text-text-muted">
-              Min Technical Score · <span className="text-primary">{form.minTechnicalScore ?? 40}</span>
-            </label>
+            <SettingLabel
+              tip={SETTING_TIPS.minTechnicalScore}
+              label={
+                <>
+                  Min Technical Score · <span className="text-primary">{form.minTechnicalScore ?? 40}</span>
+                </>
+              }
+            />
             <input
               className="w-full mt-2 accent-primary"
               type="range"
@@ -338,6 +531,7 @@ export default function SettingsPage() {
           </div>
           <Field
             label="Max 24h pump % (skip FOMO)"
+            tip={SETTING_TIPS.maxPump24hPct}
             type="number"
             min={5}
             max={50}
@@ -346,6 +540,7 @@ export default function SettingsPage() {
           />
           <Field
             label="SL cooldown (minutes)"
+            tip={SETTING_TIPS.slCooldownMinutes}
             type="number"
             min={0}
             max={1440}
@@ -354,6 +549,7 @@ export default function SettingsPage() {
           />
           <Field
             label="TP reopen cooldown (min)"
+            tip={SETTING_TIPS.tpReopenCooldownMinutes}
             type="number"
             min={0}
             max={480}
@@ -362,18 +558,18 @@ export default function SettingsPage() {
           />
           <ToggleRow
             label="Entry gate (balanced TA filters)"
+            tip={SETTING_TIPS.entryGateEnabled}
             active={form.entryGateEnabled ?? true}
             onChange={(v) => set({ entryGateEnabled: v })}
           />
           <p className="md:col-span-3 text-[11px] text-text-muted mono leading-relaxed -mt-1">
             Balanced: BUY/STRONG_BUY + score ≥ {form.minTechnicalScore ?? 40} (STRONG_BUY ≥{" "}
-            {Math.max(30, (form.minTechnicalScore ?? 40) - 10)}), price ≥ EMA20, MACD 1h ≥ 0, RSI 15m 35–70, no 15m
-            falling trend, skip 24h pump &gt; {form.maxPump24hPct ?? 15}%.
+            {Math.max(30, (form.minTechnicalScore ?? 40) - 10)}), price ≥ EMA20 ({form.analysisTrendInterval ?? "1h"}),
+            MACD trend ≥ 0, RSI entry {form.analysisEntryInterval ?? "15m"} 35–70, no falling entry trend, skip 24h pump &gt;{" "}
+            {form.maxPump24hPct ?? 15}%.
           </p>
           <div>
-            <label className="text-[10px] mono uppercase tracking-widest text-text-muted">
-              Display Timezone
-            </label>
+            <SettingLabel tip={SETTING_TIPS.displayTimezone} label="Display Timezone" />
             <select
               className="input mt-1"
               value={form.displayTimezone || "Europe/Bucharest"}
@@ -391,7 +587,11 @@ export default function SettingsPage() {
         <div className="rounded-xl border border-border/60 bg-surface-2/20 p-4 mt-6">
           <div className="flex items-center gap-2 mb-1">
             <Ban className="h-4 w-4 text-warning shrink-0" />
-            <span className="text-sm font-heading tracking-wide">Pair blacklist</span>
+            <SettingLabel
+              tip={SETTING_TIPS.pairBlacklist}
+              label="Pair blacklist"
+              className="text-sm font-heading tracking-wide normal-case"
+            />
           </div>
           <p className="text-[11px] text-text-muted mono mb-3 leading-relaxed">
             Symbols excluded from automated trading (analysis cron). Use base ticker (BTC, ETH) or full pair (BTCUSDC). Does not close existing positions.
@@ -457,12 +657,14 @@ export default function SettingsPage() {
         <div className="grid md:grid-cols-2 gap-4">
           <Field
             label="API Key"
+            tip={SETTING_TIPS.binanceApiKey}
             type="password"
             value={form.binanceApiKey || ""}
             onChange={(v) => set({ binanceApiKey: v })}
           />
           <Field
             label="API Secret"
+            tip={SETTING_TIPS.binanceApiSecret}
             type="password"
             value={form.binanceApiSecret || ""}
             onChange={(v) => set({ binanceApiSecret: v })}
@@ -472,6 +674,7 @@ export default function SettingsPage() {
         <div className="mt-4">
           <ToggleRow
             label={form.binanceTestnet ? "Testnet (safe)" : "Live Trading (real money)"}
+            tip={SETTING_TIPS.binanceTestnet}
             active={!!form.binanceTestnet}
             onChange={(v) => set({ binanceTestnet: v })}
           />
@@ -486,18 +689,21 @@ export default function SettingsPage() {
         <div className="grid md:grid-cols-2 gap-4">
           <Field
             label="Bot Token"
+            tip={SETTING_TIPS.telegramBotToken}
             type="password"
             value={form.telegramBotToken || ""}
             onChange={(v) => set({ telegramBotToken: v })}
           />
           <Field
             label="Chat ID"
+            tip={SETTING_TIPS.telegramChatId}
             value={form.telegramChatId || ""}
             onChange={(v) => set({ telegramChatId: v })}
           />
         </div>
       </Card>
     </div>
+    </TooltipProvider>
   );
 }
 
@@ -524,14 +730,28 @@ function BigToggle({ active, onChange }: { active: boolean; onChange: (v: boolea
   );
 }
 
-function ToggleRow({ label, active, onChange }: { label: string; active: boolean; onChange: (v: boolean) => void }) {
+function ToggleRow({
+  label,
+  tip,
+  active,
+  onChange,
+}: {
+  label: string;
+  tip?: string;
+  active: boolean;
+  onChange: (v: boolean) => void;
+}) {
   return (
     <div className="flex items-center justify-between rounded-lg border border-border/60 bg-surface-2/30 p-3">
-      <span className="text-sm">{label}</span>
+      {tip ? (
+        <SettingLabel label={label} tip={tip} className="text-sm normal-case tracking-normal font-sans" />
+      ) : (
+        <span className="text-sm">{label}</span>
+      )}
       <button
         onClick={() => onChange(!active)}
         className={cn(
-          "relative h-6 w-12 rounded-full border transition",
+          "relative h-6 w-12 rounded-full border transition shrink-0",
           active ? "bg-primary/20 border-primary/60" : "bg-surface-2 border-border"
         )}
       >
@@ -548,6 +768,7 @@ function ToggleRow({ label, active, onChange }: { label: string; active: boolean
 
 function Field({
   label,
+  tip,
   value,
   onChange,
   type = "text",
@@ -556,6 +777,7 @@ function Field({
   max,
 }: {
   label: string;
+  tip?: string;
   value: any;
   onChange: (v: string) => void;
   type?: string;
@@ -565,7 +787,7 @@ function Field({
 }) {
   return (
     <div>
-      <label className="text-[10px] mono uppercase tracking-widest text-text-muted">{label}</label>
+      {tip ? <SettingLabel label={label} tip={tip} /> : <span className="text-[10px] mono uppercase tracking-widest text-text-muted">{label}</span>}
       <input
         className="input mt-1"
         type={type}
@@ -576,5 +798,45 @@ function Field({
         onChange={(e) => onChange(e.target.value)}
       />
     </div>
+  );
+}
+
+function SettingLabel({
+  label,
+  tip,
+  className,
+}: {
+  label: ReactNode;
+  tip: string;
+  className?: string;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={cn(
+            "inline-flex items-center gap-1 cursor-help border-b border-dotted border-text-muted/50 text-[10px] mono uppercase tracking-widest text-text-muted",
+            className
+          )}
+        >
+          {label}
+          <HelpCircle className="h-3 w-3 shrink-0 opacity-60" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs leading-relaxed">
+        {tip}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function SettingTip({ tip, children }: { tip: string; children: ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs leading-relaxed">
+        {tip}
+      </TooltipContent>
+    </Tooltip>
   );
 }

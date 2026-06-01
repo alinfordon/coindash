@@ -12,6 +12,7 @@ export async function POST(req: Request) {
     aiProvider: body.aiProvider || current.aiProvider,
     aiModel: body.aiModel || current.aiModel,
     analysisAiModel: body.analysisAiModel ?? current.analysisAiModel ?? "",
+    zaiBaseUrl: body.zaiBaseUrl ?? current.zaiBaseUrl ?? "https://api.z.ai/api/paas/v4",
     aiApiKey: body.aiApiKey && !body.aiApiKey.includes("•") ? body.aiApiKey : current.aiApiKey,
     ollamaUrl: body.ollamaUrl || current.ollamaUrl,
   };

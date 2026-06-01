@@ -23,9 +23,13 @@ export default function DashboardPage() {
       const r = await fetch(path, { method: "POST" });
       const j = await r.json();
       if (path.includes("analysis")) {
-        const summary = j.reason || `Analyzed ${j.analyzed ?? 0}, opened ${j.opened ?? 0}`;
-        if ((j.opened ?? 0) > 0) toast.success(summary, { id: path, duration: 8000 });
-        else toast.warning?.(summary, { id: path, duration: 12000 }) ?? toast(summary, { id: path, duration: 12000 });
+        if (j.error) {
+          toast.error(j.error, { id: path, duration: 12000 });
+        } else {
+          const summary = j.reason || `Analyzed ${j.analyzed ?? 0}/${j.pairsQueued ?? "?"}, opened ${j.opened ?? 0}`;
+          if ((j.opened ?? 0) > 0) toast.success(summary, { id: path, duration: 8000 });
+          else toast.warning?.(summary, { id: path, duration: 14000 }) ?? toast(summary, { id: path, duration: 14000 });
+        }
       } else {
         toast.success(`Checked ${j.checked ?? 0}, closed ${j.closed ?? 0}`, { id: path });
       }

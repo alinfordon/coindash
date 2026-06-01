@@ -3,14 +3,16 @@ import { Settings } from "@/models/Settings";
 import { decrypt, encrypt } from "./crypto";
 import { fetchPortfolioValueUsdc } from "./binance";
 import { normalizePairBlacklistEntries } from "./pairBlacklistCore";
+import { geminiModelMigrationPatch } from "./aiModels";
 
 export type RuntimeSettings = {
-  aiProvider: "claude" | "gemini" | "ollama";
+  aiProvider: "claude" | "gemini" | "zai" | "ollama";
   aiModel: string;
   /** When set, analysis cron uses this model; position check keeps aiModel. */
   analysisAiModel: string;
   aiApiKey: string;
   ollamaUrl: string;
+  zaiBaseUrl: string;
   binanceApiKey: string;
   binanceApiSecret: string;
   binanceTestnet: boolean;
@@ -28,6 +30,8 @@ export type RuntimeSettings = {
   slCooldownMinutes: number;
   tpReopenCooldownMinutes: number;
   defaultReopenCooldownMinutes: number;
+  analysisTrendInterval: string;
+  analysisEntryInterval: string;
   stopLossPercent: number;
   takeProfitPercent: number;
   riskRewardRatio: number;
@@ -49,9 +53,12 @@ export async function getSettings(): Promise<RuntimeSettings> {
   if (!doc) {
     const created = await Settings.create({
       aiProvider: (process.env.AI_PROVIDER as any) || "claude",
-      aiModel: process.env.ANTHROPIC_MODEL || process.env.GOOGLE_MODEL || process.env.OLLAMA_MODEL || "claude-sonnet-4-5",
-      aiApiKey: encrypt(process.env.ANTHROPIC_API_KEY || process.env.GOOGLE_API_KEY || ""),
+      aiModel: process.env.ANTHROPIC_MODEL || process.env.GOOGLE_MODEL || process.env.ZAI_MODEL || process.env.OLLAMA_MODEL || "claude-sonnet-4-5",
+      aiApiKey: encrypt(
+        process.env.ANTHROPIC_API_KEY || process.env.GOOGLE_API_KEY || process.env.ZAI_API_KEY || ""
+      ),
       ollamaUrl: process.env.OLLAMA_URL || "http://localhost:11434",
+      zaiBaseUrl: process.env.ZAI_BASE_URL || "https://api.z.ai/api/paas/v4",
       binanceApiKey: encrypt(process.env.BINANCE_API_KEY || ""),
       binanceApiSecret: encrypt(process.env.BINANCE_API_SECRET || ""),
       binanceTestnet: (process.env.BINANCE_TESTNET || "true") === "true",
@@ -63,6 +70,15 @@ export async function getSettings(): Promise<RuntimeSettings> {
   const out: any = { ...doc };
   for (const f of SECRET_FIELDS) out[f] = decrypt(out[f] || "");
   out.pairBlacklist = normalizePairBlacklistEntries(out.pairBlacklist);
+
+  const geminiPatch = geminiModelMigrationPatch(out.aiProvider, out.aiModel, out.analysisAiModel);
+  if (geminiPatch) {
+    Object.assign(out, geminiPatch);
+    Settings.findOneAndUpdate({}, { $set: geminiPatch }).catch((e) =>
+      console.warn("[settings] gemini model migration failed:", e?.message)
+    );
+  }
+
   syncToEnv(out);
   return out as RuntimeSettings;
 }
@@ -73,6 +89,12 @@ export async function updateSettings(patch: Partial<RuntimeSettings>): Promise<R
   if ("pairBlacklist" in update && Array.isArray(update.pairBlacklist)) {
     update.pairBlacklist = normalizePairBlacklistEntries(update.pairBlacklist);
   }
+  const current = await Settings.findOne().lean();
+  const provider = update.aiProvider ?? (current as any)?.aiProvider;
+  const aiModel = update.aiModel ?? (current as any)?.aiModel ?? "";
+  const analysisAiModel = update.analysisAiModel ?? (current as any)?.analysisAiModel ?? "";
+  const geminiPatch = geminiModelMigrationPatch(provider, aiModel, analysisAiModel);
+  if (geminiPatch) Object.assign(update, geminiPatch);
   for (const f of SECRET_FIELDS) {
     if (f in update && typeof update[f] === "string") {
       update[f] = update[f] ? encrypt(update[f]) : "";
@@ -94,7 +116,11 @@ export function syncToEnv(s: RuntimeSettings) {
     process.env.ANTHROPIC_MODEL = s.aiModel || "claude-sonnet-4-5";
   } else if (s.aiProvider === "gemini") {
     process.env.GOOGLE_API_KEY = s.aiApiKey || "";
-    process.env.GOOGLE_MODEL = s.aiModel || "gemini-2.0-flash";
+    process.env.GOOGLE_MODEL = s.aiModel || "gemini-2.5-flash-lite";
+  } else if (s.aiProvider === "zai") {
+    process.env.ZAI_API_KEY = s.aiApiKey || "";
+    process.env.ZAI_MODEL = s.aiModel || "glm-4.5-air";
+    process.env.ZAI_BASE_URL = s.zaiBaseUrl || "https://api.z.ai/api/paas/v4";
   } else if (s.aiProvider === "ollama") {
     process.env.OLLAMA_URL = s.ollamaUrl || "http://localhost:11434";
     process.env.OLLAMA_MODEL = s.aiModel || "llama3.2";

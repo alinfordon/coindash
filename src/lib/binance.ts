@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import type { KlineInterval } from "./analysisIntervals";
 
 /**
  * Lightweight Binance REST client. Uses raw fetch (no external SDK) so it works
@@ -193,7 +194,7 @@ export async function signedRequest<T = any>(
   return doCall(false);
 }
 
-export async function fetchCandles(symbol: string, interval: "1h" | "15m" | "5m" | "1m" = "1h", limit = 100, testnet = true): Promise<Candle[]> {
+export async function fetchCandles(symbol: string, interval: KlineInterval = "1h", limit = 100, testnet = true): Promise<Candle[]> {
   const data = (await publicGet<any[]>("/api/v3/klines", { symbol, interval, limit }, testnet)) as any[];
   return data.map((c) => ({
     openTime: c[0],
@@ -243,11 +244,13 @@ export async function fetchPrice(symbol: string, testnet = true): Promise<number
 export async function topUsdcPairs(n = 50, testnet = true): Promise<Ticker24h[]> {
   const all = await fetchAll24h(testnet);
   const stables = /^(USDT|USDC|BUSD|TUSD|FDUSD|DAI|USDP|PYUSD|USDE|EUR|TRY|GBP)USDC$/i;
+  /** Testnet often has thin books — use a lower floor so the scan list is not empty. */
+  const minQuoteVolume = testnet ? 100_000 : 1_000_000;
   const filtered = all
     .filter((t) => t.symbol.endsWith("USDC"))
     .filter((t) => !stables.test(t.symbol))
     .filter((t) => t.lastPrice >= 0.001)
-    .filter((t) => t.quoteVolume >= 1_000_000)
+    .filter((t) => t.quoteVolume >= minQuoteVolume)
     .sort((a, b) => b.quoteVolume - a.quoteVolume);
   return filtered.slice(0, n);
 }

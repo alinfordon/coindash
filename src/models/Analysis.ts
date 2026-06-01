@@ -4,7 +4,8 @@ const AnalysisSchema = new Schema(
   {
     pair: { type: String, required: true, index: true },
     analyzedAt: { type: Date, default: Date.now, index: true },
-    interval: { type: String, enum: ["1h", "15m"], default: "1h" },
+    interval: { type: String, default: "1h" },
+    entryInterval: { type: String, default: "15m" },
     technicalScore: Number,
     fundamentalScore: Number,
     combinedScore: Number,

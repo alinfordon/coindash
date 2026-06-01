@@ -2,12 +2,14 @@ import mongoose, { Schema, models, model } from "mongoose";
 
 const SettingsSchema = new Schema(
   {
-    aiProvider: { type: String, enum: ["claude", "gemini", "ollama"], default: "claude" },
+    aiProvider: { type: String, enum: ["claude", "gemini", "zai", "ollama"], default: "claude" },
     aiModel: { type: String, default: "claude-sonnet-4-5" },
     /** Empty = use aiModel. Used only by analysis cron (market scan). */
     analysisAiModel: { type: String, default: "" },
     aiApiKey: { type: String, default: "" },
     ollamaUrl: { type: String, default: "http://localhost:11434" },
+    /** Z.AI OpenAI-compatible base URL (general API or Coding Plan endpoint). */
+    zaiBaseUrl: { type: String, default: "https://api.z.ai/api/paas/v4" },
     binanceApiKey: { type: String, default: "" },
     binanceApiSecret: { type: String, default: "" },
     binanceTestnet: { type: Boolean, default: true },
@@ -26,6 +28,10 @@ const SettingsSchema = new Schema(
     slCooldownMinutes: { type: Number, default: 120, min: 0, max: 1440 },
     tpReopenCooldownMinutes: { type: Number, default: 30, min: 0, max: 480 },
     defaultReopenCooldownMinutes: { type: Number, default: 30, min: 0, max: 480 },
+    /** Primary TA timeframe (trend context) for analysis cron. */
+    analysisTrendInterval: { type: String, default: "1h" },
+    /** Secondary TA timeframe (entry timing) for analysis cron. */
+    analysisEntryInterval: { type: String, default: "15m" },
     stopLossPercent: { type: Number, default: 2 },
     takeProfitPercent: { type: Number, default: 4 },
     riskRewardRatio: { type: Number, default: 2.0 },
