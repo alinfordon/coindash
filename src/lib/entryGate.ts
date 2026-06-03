@@ -105,10 +105,11 @@ export function compareBuyCandidates(a: EntryCandidate, b: EntryCandidate): numb
 }
 
 export async function pairReopenBlocked(
+  userId: string,
   pair: string,
   config: Pick<EntryGateConfig, "slCooldownMinutes" | "tpReopenCooldownMinutes" | "defaultReopenCooldownMinutes">
 ): Promise<{ blocked: boolean; reason?: string }> {
-  const recent = await Trade.findOne({ pair, status: "CLOSED" }).sort({ closedAt: -1 }).lean();
+  const recent = await Trade.findOne({ userId, pair, status: "CLOSED" }).sort({ closedAt: -1 }).lean();
   if (!recent?.closedAt) return { blocked: false };
 
   const elapsedMs = Date.now() - new Date(recent.closedAt).getTime();

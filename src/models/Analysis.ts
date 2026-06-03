@@ -2,6 +2,7 @@ import mongoose, { Schema, models, model } from "mongoose";
 
 const AnalysisSchema = new Schema(
   {
+    userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     pair: { type: String, required: true, index: true },
     analyzedAt: { type: Date, default: Date.now, index: true },
     interval: { type: String, default: "1h" },
@@ -45,7 +46,7 @@ const AnalysisSchema = new Schema(
   { timestamps: true }
 );
 
-AnalysisSchema.index({ pair: 1, analyzedAt: -1 });
+AnalysisSchema.index({ userId: 1, pair: 1, analyzedAt: -1 });
 
 export type AnalysisDoc = mongoose.InferSchemaType<typeof AnalysisSchema> & { _id: any };
 export const Analysis = (models.Analysis as mongoose.Model<AnalysisDoc>) || model<AnalysisDoc>("Analysis", AnalysisSchema);

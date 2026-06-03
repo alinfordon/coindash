@@ -8,10 +8,25 @@ import { AILog } from "@/models/AILog";
 import { closePosition } from "@/lib/trading";
 import { reconcileOpenTrades } from "@/lib/reconciliation";
 import { resolveAnalysisIntervals } from "@/lib/analysisIntervals";
+import { toObjectId, userScope, listPositionCronUserIds } from "@/lib/tenant";
 
-export async function runPositionCron(opts: { manual?: boolean } = {}) {
+export async function runPositionCron(opts: { manual?: boolean; userId?: string } = {}) {
+  if (opts.userId) {
+    return runPositionCronForUser(opts.userId, opts);
+  }
+  const userIds = await listPositionCronUserIds();
+  if (userIds.length === 0) {
+    return { skipped: true, reason: "no users with pilot + position cron active" };
+  }
+  const results = await Promise.all(userIds.map((id) => runPositionCronForUser(id, opts)));
+  return userIds.length === 1 ? results[0] : { multi: true, results };
+}
+
+async function runPositionCronForUser(userId: string, opts: { manual?: boolean } = {}) {
   await connectDB();
-  const settings = await getSettings();
+  const settings = await getSettings(userId);
+  const uid = toObjectId(userId);
+
   if (!opts.manual) {
     if (!settings.pilotActive) {
       console.log("[positionCron] skipped — AI Pilot is paused");
@@ -23,20 +38,22 @@ export async function runPositionCron(opts: { manual?: boolean } = {}) {
     }
   }
 
-  await AILog.create({ action: "CRON_START", decision: "POSITION_CHECK", reasoning: "Position sweep starting" });
+  await AILog.create({
+    userId: uid,
+    action: "CRON_START",
+    decision: "POSITION_CHECK",
+    reasoning: "Position sweep starting",
+  });
 
-  // First pass: reconcile any ghost/dust trades (DB says OPEN but Binance has
-  // no real position behind it). This prevents the dashboard from showing
-  // phantom positions and from over-counting capital usage.
   let reconciled: { closed: any[]; kept: number; errors: any[] } = { closed: [], kept: 0, errors: [] };
   try {
-    reconciled = await reconcileOpenTrades(settings);
+    reconciled = await reconcileOpenTrades(userId, settings);
   } catch (e: any) {
     console.warn("[positionCron] reconcile pass failed:", e?.message || e);
   }
 
   const { entry: entryInterval } = resolveAnalysisIntervals(settings);
-  const trades = await Trade.find({ status: "OPEN" }).lean();
+  const trades = await Trade.find(userScope(userId, { status: "OPEN" })).lean();
   const closed: any[] = [];
 
   for (const t of trades) {
@@ -60,12 +77,12 @@ export async function runPositionCron(opts: { manual?: boolean } = {}) {
 
       if (!ocoExecuting) {
         if (t.takeProfit && price >= (t.takeProfit as number)) {
-          await closePosition(String(t._id), "TP_HIT", settings);
+          await closePosition(String(t._id), userId, "TP_HIT", settings);
           closed.push({ pair: t.pair, reason: "TP_HIT" });
           continue;
         }
         if (t.stopLoss && price <= (t.stopLoss as number)) {
-          await closePosition(String(t._id), "SL_HIT", settings);
+          await closePosition(String(t._id), userId, "SL_HIT", settings);
           closed.push({ pair: t.pair, reason: "SL_HIT" });
           continue;
         }
@@ -93,6 +110,7 @@ export async function runPositionCron(opts: { manual?: boolean } = {}) {
       const parsed = safeParseJson<{ decision: string; confidence: number; reasoning: string }>(ai.text);
 
       await AILog.create({
+        userId: uid,
         action: "POSITION_CHECK",
         pair: t.pair,
         decision: parsed?.decision ?? "HOLD",
@@ -103,15 +121,16 @@ export async function runPositionCron(opts: { manual?: boolean } = {}) {
       });
 
       if (parsed?.decision === "SELL_NOW" && (parsed.confidence ?? 0) >= 80) {
-        await closePosition(String(t._id), "AI_DECISION", settings);
+        await closePosition(String(t._id), userId, "AI_DECISION", settings);
         closed.push({ pair: t.pair, reason: "AI_DECISION" });
       }
     } catch (e: any) {
-      await AILog.create({ action: "ERROR", pair: t.pair, reasoning: `positionCron: ${e.message}` });
+      await AILog.create({ userId: uid, action: "ERROR", pair: t.pair, reasoning: `positionCron: ${e.message}` });
     }
   }
 
   await AILog.create({
+    userId: uid,
     action: "CRON_END",
     decision: "POSITION_CHECK",
     reasoning: `Checked ${trades.length}, closed ${closed.length}, reconciled ${reconciled.closed.length}`,

@@ -1,6 +1,7 @@
 import { Trade } from "@/models/Trade";
 import { AILog } from "@/models/AILog";
 import { type RuntimeSettings, syncCashBalanceFromBinance } from "./settings";
+import { toObjectId } from "./tenant";
 import {
   fetchPrice,
   marketBuyQuote,
@@ -16,6 +17,7 @@ import { notifyTelegram } from "./notify";
 import { isPairBlacklisted } from "./pairBlacklist";
 
 export type OpenParams = {
+  userId: string;
   pair: string;
   usdcValue: number;
   entryHint?: number;
@@ -110,6 +112,7 @@ export async function openPosition(p: OpenParams) {
       ocoError = e.message?.slice(0, 300) || String(e);
       console.error(`[OCO FAIL] ${p.pair}: ${ocoError}`);
       await AILog.create({
+        userId: toObjectId(p.userId),
         action: "ERROR",
         pair: p.pair,
         decision: "OCO_FAIL",
@@ -123,6 +126,7 @@ export async function openPosition(p: OpenParams) {
   const finalTakeProfit = entryPriceActual * (1 + p.takeProfitPct / 100);
 
   const trade = await Trade.create({
+    userId: toObjectId(p.userId),
     pair: p.pair,
     side: "BUY",
     status: "OPEN",
@@ -143,6 +147,7 @@ export async function openPosition(p: OpenParams) {
   });
 
   await AILog.create({
+    userId: toObjectId(p.userId),
     action: "BUY_SIGNAL",
     pair: p.pair,
     decision: "OPEN",
@@ -159,14 +164,19 @@ export async function openPosition(p: OpenParams) {
 
   // Refresh cached USDC cash snapshot so the dashboard reflects the spent amount.
   if (!p.settings.dryRun) {
-    await syncCashBalanceFromBinance(p.settings.binanceTestnet);
+    await syncCashBalanceFromBinance(p.userId, p.settings.binanceTestnet);
   }
 
   return trade;
 }
 
-export async function closePosition(tradeId: string, reason: "TP_HIT" | "SL_HIT" | "AI_DECISION" | "MANUAL", settings: RuntimeSettings) {
-  const trade = await Trade.findById(tradeId);
+export async function closePosition(
+  tradeId: string,
+  userId: string,
+  reason: "TP_HIT" | "SL_HIT" | "AI_DECISION" | "MANUAL",
+  settings: RuntimeSettings
+) {
+  const trade = await Trade.findOne({ _id: tradeId, userId: toObjectId(userId) });
   if (!trade || trade.status !== "OPEN") throw new Error("Trade not open");
   const price = await fetchPrice(trade.pair, settings.binanceTestnet);
 
@@ -235,6 +245,7 @@ export async function closePosition(tradeId: string, reason: "TP_HIT" | "SL_HIT"
   await trade.save();
 
   await AILog.create({
+    userId: toObjectId(userId),
     action: "SELL_SIGNAL",
     pair: trade.pair,
     decision: reason,
@@ -251,7 +262,7 @@ export async function closePosition(tradeId: string, reason: "TP_HIT" | "SL_HIT"
 
   // Refresh cached USDC cash snapshot so the dashboard reflects the proceeds.
   if (!settings.dryRun && !trade.dryRun) {
-    await syncCashBalanceFromBinance(settings.binanceTestnet);
+    await syncCashBalanceFromBinance(userId, settings.binanceTestnet);
   }
 
   return trade;

@@ -14,10 +14,11 @@ import {
   LogOut,
   User,
   BarChart3,
+  Shield,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const nav = [
+const baseNav = [
   { href: "/dashboard", label: "Dashboard", short: "Home", icon: LayoutDashboard },
   { href: "/dashboard/stats", label: "Statistics", short: "Stats", icon: BarChart3 },
   { href: "/positions", label: "Positions", short: "Pos", icon: Activity },
@@ -26,8 +27,31 @@ const nav = [
   { href: "/settings", label: "Settings", short: "Cfg", icon: Settings },
 ];
 
+const adminNavItem = {
+  href: "/admin",
+  label: "Admin",
+  short: "Adm",
+  icon: Shield,
+};
+
+function useNavItems() {
+  const { data: session } = useSession();
+  if (session?.user?.role === "admin") {
+    return [...baseNav, adminNavItem];
+  }
+  return baseNav;
+}
+
+function isNavActive(pathname: string | null, href: string) {
+  if (href === "/dashboard") {
+    return pathname === "/dashboard" || pathname === "/dashboard/";
+  }
+  return pathname?.startsWith(href) ?? false;
+}
+
 export function Sidebar() {
   const pathname = usePathname();
+  const nav = useNavItems();
   return (
     <aside
       className="hidden md:flex fixed top-0 left-0 h-screen w-[220px] z-30 flex-col border-r border-border/80 bg-surface/70 backdrop-blur-xl"
@@ -47,10 +71,7 @@ export function Sidebar() {
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
         {nav.map((n) => {
-          const active =
-            n.href === "/dashboard"
-              ? pathname === "/dashboard" || pathname === "/dashboard/"
-              : pathname?.startsWith(n.href);
+          const active = isNavActive(pathname, n.href);
           const Icon = n.icon;
           return (
             <Link
@@ -89,6 +110,7 @@ export function Sidebar() {
 function SessionCard() {
   const { data: session } = useSession();
   const name = session?.user?.name || "guest";
+  const role = session?.user?.role;
   return (
     <div className="flex items-center justify-between gap-2 rounded-lg border border-border/70 bg-surface-2/60 px-3 py-2">
       <div className="flex items-center gap-2 min-w-0">
@@ -97,7 +119,9 @@ function SessionCard() {
         </div>
         <div className="min-w-0">
           <div className="text-[11px] font-semibold text-text-primary truncate">{name}</div>
-          <div className="text-[9px] mono uppercase tracking-widest text-text-muted">signed in</div>
+          <div className="text-[9px] mono uppercase tracking-widest text-text-muted">
+            {role === "admin" ? "administrator" : "utilizator"}
+          </div>
         </div>
       </div>
       <button
@@ -114,17 +138,16 @@ function SessionCard() {
 /** Bottom-fixed navigation for mobile (<md). Icon + short label per route. */
 export function MobileNav() {
   const pathname = usePathname();
+  const nav = useNavItems();
+  const cols = nav.length <= 6 ? 6 : 7;
   return (
     <nav
       className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-border/80 bg-surface/80 backdrop-blur-xl"
       style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
     >
-      <div className="grid grid-cols-6">
+      <div className={cn("grid", cols === 7 ? "grid-cols-7" : "grid-cols-6")}>
         {nav.map((n) => {
-          const active =
-            n.href === "/dashboard"
-              ? pathname === "/dashboard" || pathname === "/dashboard/"
-              : pathname?.startsWith(n.href);
+          const active = isNavActive(pathname, n.href);
           const Icon = n.icon;
           return (
             <Link

@@ -6,6 +6,8 @@ import { getSettings } from "@/lib/settings";
 import { fetchPortfolioValueUsdc, fetchPrice } from "@/lib/binance";
 import { startOfDayInTz } from "@/lib/utils";
 import { dashboardClosedTradeMatch } from "@/lib/dashboardTrades";
+import { userScope, toObjectId } from "@/lib/tenant";
+import { getApiUserId, apiError } from "@/lib/apiUser";
 
 export const dynamic = "force-dynamic";
 
@@ -17,8 +19,10 @@ export const dynamic = "force-dynamic";
  * single call happens to fail.
  */
 export async function GET() {
+  try {
   await connectDB();
-  const settings = await getSettings();
+  const userId = await getApiUserId();
+  const settings = await getSettings(userId);
 
   // "Today" = from midnight in the user-configured timezone until now.
   // Defaults to Europe/Bucharest so the window matches the user's wall clock
@@ -26,9 +30,9 @@ export async function GET() {
   const tz = settings.displayTimezone || "Europe/Bucharest";
   const startOfToday = startOfDayInTz(new Date(), tz);
 
-  const closedMatch = dashboardClosedTradeMatch();
+  const closedMatch = dashboardClosedTradeMatch(userId);
   const [openTrades, closedToday, allClosed] = await Promise.all([
-    Trade.find({ status: "OPEN" }).lean(),
+    Trade.find(userScope(userId, { status: "OPEN" })).lean(),
     Trade.find({ ...closedMatch, closedAt: { $gte: startOfToday } }).lean(),
     Trade.find(closedMatch).lean(),
   ]);
@@ -62,7 +66,7 @@ export async function GET() {
     portfolioStale = false;
     // Persist as the new snapshot so next request has a fresh fallback.
     await Settings.findOneAndUpdate(
-      {},
+      { userId: toObjectId(userId) },
       { $set: { cashBalanceUsdc: pv.total, cashBalanceUpdatedAt } },
       { upsert: true }
     );
@@ -90,4 +94,7 @@ export async function GET() {
     positionCheckCronActive: settings.positionCheckCronActive,
     dryRun: settings.dryRun,
   });
+  } catch (e) {
+    return apiError(e);
+  }
 }

@@ -28,6 +28,7 @@ export type ClosedTradePnL = {
 export type AnalyticsTimeframe = "daily" | "weekly" | "monthly";
 
 export type AnalyticsFilters = {
+  userId: string;
   from?: Date | null;
   to?: Date | null;
   pair?: string | null;
@@ -391,7 +392,7 @@ export function durationMinutesExpr() {
 
 export function buildClosedAnalyticsMatch(filters: AnalyticsFilters): FilterQuery<TradeDoc> {
   const m: FilterQuery<TradeDoc> = {
-    ...dashboardClosedTradeMatch(),
+    ...dashboardClosedTradeMatch(filters.userId),
   };
 
   const ca: Record<string, Date> = {};
@@ -414,8 +415,10 @@ export function buildClosedAnalyticsMatch(filters: AnalyticsFilters): FilterQuer
   return m;
 }
 
-export function buildBaselineClosedMatch(filters: Pick<AnalyticsFilters, "pair" | "strategy">): FilterQuery<TradeDoc> {
-  const m: FilterQuery<TradeDoc> = { ...dashboardClosedTradeMatch() };
+export function buildBaselineClosedMatch(
+  filters: Pick<AnalyticsFilters, "userId" | "pair" | "strategy">
+): FilterQuery<TradeDoc> {
+  const m: FilterQuery<TradeDoc> = { ...dashboardClosedTradeMatch(filters.userId) };
   if (filters.pair && filters.pair !== "__all__") (m as any).pair = filters.pair;
   if (filters.strategy && filters.strategy !== "__all__") {
     const s = filters.strategy;
@@ -431,7 +434,9 @@ function timeframeUnit(tf: AnalyticsTimeframe): "day" | "week" | "month" {
   return "day";
 }
 
-export function parseAnalyticsSearchParams(sp: URLSearchParams): AnalyticsFilters {
+export function parseAnalyticsSearchParams(
+  sp: URLSearchParams
+): Omit<AnalyticsFilters, "userId"> {
   const fromRaw = sp.get("from");
   const toRaw = sp.get("to");
   const from = fromRaw ? new Date(fromRaw) : null;
@@ -635,9 +640,9 @@ export async function computeAnalyticsReport(filters: AnalyticsFilters): Promise
   const baselineTradeCount = bl?.n ?? 0;
   const baselineWinRate = baselineTradeCount ? (bl.wins || 0) / baselineTradeCount : 0;
 
-  const distinctPairs = await Trade.distinct("pair", { ...dashboardClosedTradeMatch() });
+  const distinctPairs = await Trade.distinct("pair", { ...dashboardClosedTradeMatch(filters.userId) });
   const distinctStrategies = await Trade.aggregate([
-    { $match: dashboardClosedTradeMatch() },
+    { $match: dashboardClosedTradeMatch(filters.userId) },
     { $group: { _id: strategyExpr() } },
     { $sort: { _id: 1 } },
   ]);
@@ -658,7 +663,7 @@ export async function computeAnalyticsReport(filters: AnalyticsFilters): Promise
   const expectancyVal = expectancy(pnlsOrdered);
   const pf = profitFactorFromPnls(pnlsOrdered);
 
-  const settings = await getSettings();
+  const settings = await getSettings(filters.userId);
   const returnBasisFloorUsd = Math.max(10, Number(settings.maxUsdcPerOrder) || 50);
 
   let portfolioDenominatorUsd = Number(settings.cashBalanceUsdc) || 0;
@@ -930,7 +935,7 @@ export async function computeAnalyticsReport(filters: AnalyticsFilters): Promise
   let recentTrades: RecentTradeRow[] = (f.recentClosed || []).map(rowToRecent);
 
   if (filters.includeOpenInRecent) {
-    const openMatch: FilterQuery<TradeDoc> = { status: "OPEN" };
+    const openMatch: FilterQuery<TradeDoc> = { userId: filters.userId, status: "OPEN" };
     if (filters.pair && filters.pair !== "__all__") (openMatch as any).pair = filters.pair;
     if (filters.strategy && filters.strategy !== "__all__") {
       const s = filters.strategy;

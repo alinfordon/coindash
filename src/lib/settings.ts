@@ -4,11 +4,12 @@ import { decrypt, encrypt } from "./crypto";
 import { fetchPortfolioValueUsdc } from "./binance";
 import { normalizePairBlacklistEntries } from "./pairBlacklistCore";
 import { geminiModelMigrationPatch } from "./aiModels";
+import { migrateLegacyTenantData, toObjectId } from "./tenant";
+import { User } from "@/models/User";
 
 export type RuntimeSettings = {
   aiProvider: "claude" | "gemini" | "zai" | "ollama";
   aiModel: string;
-  /** When set, analysis cron uses this model; position check keeps aiModel. */
   analysisAiModel: string;
   aiApiKey: string;
   ollamaUrl: string;
@@ -40,56 +41,89 @@ export type RuntimeSettings = {
   displayTimezone: string;
   cashBalanceUsdc: number;
   cashBalanceUpdatedAt: Date | null;
-  /** Uppercase symbols or base assets excluded from automated opens (see Settings UI). */
   pairBlacklist: string[];
   updatedAt?: Date;
 };
 
 const SECRET_FIELDS = ["aiApiKey", "binanceApiKey", "binanceApiSecret", "telegramBotToken"] as const;
 
-export async function getSettings(): Promise<RuntimeSettings> {
+function defaultSettingsPayload(fromEnv: boolean) {
+  return {
+    aiProvider: (process.env.AI_PROVIDER as RuntimeSettings["aiProvider"]) || "claude",
+    aiModel:
+      process.env.ANTHROPIC_MODEL ||
+      process.env.GOOGLE_MODEL ||
+      process.env.ZAI_MODEL ||
+      process.env.OLLAMA_MODEL ||
+      "claude-sonnet-4-5",
+    aiApiKey: fromEnv
+      ? encrypt(
+          process.env.ANTHROPIC_API_KEY ||
+            process.env.GOOGLE_API_KEY ||
+            process.env.ZAI_API_KEY ||
+            ""
+        )
+      : "",
+    ollamaUrl: process.env.OLLAMA_URL || "http://localhost:11434",
+    zaiBaseUrl: process.env.ZAI_BASE_URL || "https://api.z.ai/api/paas/v4",
+    binanceApiKey: fromEnv ? encrypt(process.env.BINANCE_API_KEY || "") : "",
+    binanceApiSecret: fromEnv ? encrypt(process.env.BINANCE_API_SECRET || "") : "",
+    binanceTestnet: fromEnv ? (process.env.BINANCE_TESTNET || "true") === "true" : true,
+    dryRun: true,
+    pilotActive: false,
+    pairBlacklist: [] as string[],
+  };
+}
+
+function docToRuntime(doc: Record<string, unknown>): RuntimeSettings {
+  const out: any = { ...doc };
+  for (const f of SECRET_FIELDS) out[f] = decrypt((out[f] as string) || "");
+  out.pairBlacklist = normalizePairBlacklistEntries(out.pairBlacklist);
+  return out as RuntimeSettings;
+}
+
+export async function getSettings(userId: string): Promise<RuntimeSettings> {
   await connectDB();
-  let doc = await Settings.findOne().lean();
+  await migrateLegacyTenantData();
+
+  const uid = toObjectId(userId);
+  let doc = await Settings.findOne({ userId: uid }).lean();
+
   if (!doc) {
+    const userCount = await User.countDocuments();
+    const fromEnv = userCount <= 1;
     const created = await Settings.create({
-      aiProvider: (process.env.AI_PROVIDER as any) || "claude",
-      aiModel: process.env.ANTHROPIC_MODEL || process.env.GOOGLE_MODEL || process.env.ZAI_MODEL || process.env.OLLAMA_MODEL || "claude-sonnet-4-5",
-      aiApiKey: encrypt(
-        process.env.ANTHROPIC_API_KEY || process.env.GOOGLE_API_KEY || process.env.ZAI_API_KEY || ""
-      ),
-      ollamaUrl: process.env.OLLAMA_URL || "http://localhost:11434",
-      zaiBaseUrl: process.env.ZAI_BASE_URL || "https://api.z.ai/api/paas/v4",
-      binanceApiKey: encrypt(process.env.BINANCE_API_KEY || ""),
-      binanceApiSecret: encrypt(process.env.BINANCE_API_SECRET || ""),
-      binanceTestnet: (process.env.BINANCE_TESTNET || "true") === "true",
-      pairBlacklist: [],
+      userId: uid,
+      ...defaultSettingsPayload(fromEnv),
     });
     doc = created.toObject();
   }
 
-  const out: any = { ...doc };
-  for (const f of SECRET_FIELDS) out[f] = decrypt(out[f] || "");
-  out.pairBlacklist = normalizePairBlacklistEntries(out.pairBlacklist);
+  const out = docToRuntime(doc as Record<string, unknown>);
 
   const geminiPatch = geminiModelMigrationPatch(out.aiProvider, out.aiModel, out.analysisAiModel);
   if (geminiPatch) {
     Object.assign(out, geminiPatch);
-    Settings.findOneAndUpdate({}, { $set: geminiPatch }).catch((e) =>
+    Settings.findOneAndUpdate({ userId: uid }, { $set: geminiPatch }).catch((e) =>
       console.warn("[settings] gemini model migration failed:", e?.message)
     );
   }
 
   syncToEnv(out);
-  return out as RuntimeSettings;
+  return out;
 }
 
-export async function updateSettings(patch: Partial<RuntimeSettings>): Promise<RuntimeSettings> {
+export async function updateSettings(
+  userId: string,
+  patch: Partial<RuntimeSettings>
+): Promise<RuntimeSettings> {
   await connectDB();
+  const uid = toObjectId(userId);
   const update: any = { ...patch };
   if ("pairBlacklist" in update && Array.isArray(update.pairBlacklist)) {
     update.pairBlacklist = normalizePairBlacklistEntries(update.pairBlacklist);
   }
-  const current = await Settings.findOne().lean();
+  const current = await Settings.findOne({ userId: uid }).lean();
   const provider = update.aiProvider ?? (current as any)?.aiProvider;
   const aiModel = update.aiModel ?? (current as any)?.aiModel ?? "";
   const analysisAiModel = update.analysisAiModel ?? (current as any)?.analysisAiModel ?? "";
@@ -100,15 +134,16 @@ export async function updateSettings(patch: Partial<RuntimeSettings>): Promise<R
       update[f] = update[f] ? encrypt(update[f]) : "";
     }
   }
-  const doc = await Settings.findOneAndUpdate({}, { $set: update }, { new: true, upsert: true }).lean();
-  const out: any = { ...doc };
-  for (const f of SECRET_FIELDS) out[f] = decrypt(out[f] || "");
-  out.pairBlacklist = normalizePairBlacklistEntries(out.pairBlacklist);
+  const doc = await Settings.findOneAndUpdate(
+    { userId: uid },
+    { $set: update, $setOnInsert: { userId: uid, ...defaultSettingsPayload(false) } },
+    { new: true, upsert: true }
+  ).lean();
+  const out = docToRuntime(doc as Record<string, unknown>);
   syncToEnv(out);
-  return out as RuntimeSettings;
+  return out;
 }
 
-/** Reflect current settings into process.env so libs reading env see the right values. */
 export function syncToEnv(s: RuntimeSettings) {
   process.env.AI_PROVIDER = s.aiProvider;
   if (s.aiProvider === "claude") {
@@ -132,15 +167,10 @@ export function syncToEnv(s: RuntimeSettings) {
   if (s.telegramChatId) process.env.TELEGRAM_CHAT_ID = s.telegramChatId;
 }
 
-/**
- * Pulls the full Binance portfolio value (USDC cash + all other assets priced
- * in USDC) and persists it into Settings so the dashboard has a reliable
- * snapshot to fall back on when a live call hiccups.
- *
- * Best-effort: swallows Binance errors and returns the existing snapshot so
- * the caller's main flow (open/close position) doesn't fail over this.
- */
-export async function syncCashBalanceFromBinance(testnet?: boolean): Promise<{
+export async function syncCashBalanceFromBinance(
+  userId: string,
+  testnet?: boolean
+): Promise<{
   total: number;
   updatedAt: Date | null;
   error: string | null;
@@ -149,13 +179,16 @@ export async function syncCashBalanceFromBinance(testnet?: boolean): Promise<{
   tickerOk?: boolean;
 }> {
   await connectDB();
+  const uid = toObjectId(userId);
   try {
-    const current = await Settings.findOne().lean();
+    const current = await Settings.findOne({ userId: uid }).lean();
     const net = typeof testnet === "boolean" ? testnet : (current as any)?.binanceTestnet ?? true;
+    const s = docToRuntime((current || {}) as Record<string, unknown>);
+    syncToEnv(s);
     const pv = await fetchPortfolioValueUsdc(net);
     const now = new Date();
     await Settings.findOneAndUpdate(
-      {},
+      { userId: uid },
       { $set: { cashBalanceUsdc: pv.total, cashBalanceUpdatedAt: now } },
       { upsert: true }
     );
@@ -171,7 +204,7 @@ export async function syncCashBalanceFromBinance(testnet?: boolean): Promise<{
   } catch (err: any) {
     const msg = err?.message?.slice(0, 300) || "sync failed";
     console.warn("[syncCashBalance] failed:", msg);
-    const doc = await Settings.findOne().lean();
+    const doc = await Settings.findOne({ userId: uid }).lean();
     return {
       total: (doc as any)?.cashBalanceUsdc || 0,
       updatedAt: (doc as any)?.cashBalanceUpdatedAt || null,

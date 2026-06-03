@@ -3,14 +3,14 @@
 import { useState, Suspense } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Cpu, Lock, User, LogIn, ShieldCheck } from "lucide-react";
+import { Cpu, Lock, Mail, LogIn, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 
 function LoginInner() {
   const router = useRouter();
   const params = useSearchParams();
   const callbackUrl = params.get("callbackUrl") || "/dashboard";
-  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -20,7 +20,7 @@ function LoginInner() {
     setLoading(true);
     setErr(null);
     const res = await signIn("credentials", {
-      username,
+      email: email.trim().toLowerCase(),
       password,
       redirect: false,
       callbackUrl,
@@ -79,16 +79,17 @@ function LoginInner() {
         <div className="space-y-3">
           <div>
             <label className="text-[10px] mono uppercase tracking-widest text-text-muted">
-              Username
+              Email
             </label>
             <div className="relative mt-1">
-              <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-muted" />
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-muted" />
               <input
+                type="email"
                 className="input pl-9"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="admin"
-                autoComplete="username"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                autoComplete="email"
                 autoFocus
                 required
               />
@@ -121,7 +122,7 @@ function LoginInner() {
 
         <button
           type="submit"
-          disabled={loading || !username || !password}
+          disabled={loading || !email || !password}
           className="btn-primary w-full justify-center mt-5 py-2.5"
         >
           {loading ? (
@@ -137,11 +138,8 @@ function LoginInner() {
         <div className="mt-5 flex items-start gap-2 text-[10px] text-text-muted">
           <ShieldCheck className="h-3.5 w-3.5 shrink-0 mt-0.5 text-primary" />
           <span>
-            Credentials are POST-ed over the configured transport. Password is verified against a
-            bcrypt hash when <span className="mono text-text-primary">ADMIN_PASSWORD_HASH</span> is
-            set. Session uses encrypted JWT signed with{" "}
-            <span className="mono text-text-primary">NEXTAUTH_SECRET</span>. Always run behind HTTPS
-            in production.
+            Autentificare cu email și parolă. Administratorii pot invita utilizatori noi.
+           
           </span>
         </div>
       </form>

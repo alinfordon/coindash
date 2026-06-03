@@ -2,6 +2,7 @@ import mongoose, { Schema, models, model } from "mongoose";
 
 const AILogSchema = new Schema(
   {
+    userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     timestamp: { type: Date, default: Date.now, index: true },
     action: {
       type: String,
@@ -30,7 +31,7 @@ const AILogSchema = new Schema(
   { timestamps: true }
 );
 
-AILogSchema.index({ timestamp: -1 });
+AILogSchema.index({ userId: 1, timestamp: -1 });
 
 export type AILogDoc = mongoose.InferSchemaType<typeof AILogSchema> & { _id: any };
 export const AILog = (models.AILog as mongoose.Model<AILogDoc>) || model<AILogDoc>("AILog", AILogSchema);

@@ -1,12 +1,15 @@
 import { NextResponse } from "next/server";
 import { getSettings } from "@/lib/settings";
 import { callAI, resolveAiProfile } from "@/lib/ai";
+import { getApiUserId, apiError } from "@/lib/apiUser";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
+  try {
+  const userId = await getApiUserId();
   const body = await req.json().catch(() => ({}));
-  const current = await getSettings();
+  const current = await getSettings(userId);
   const s = {
     ...current,
     aiProvider: body.aiProvider || current.aiProvider,
@@ -26,5 +29,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, latencyMs: r.latencyMs, model: r.model, sample: r.text.slice(0, 200) });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e.message?.slice(0, 400) }, { status: 400 });
+  }
+  } catch (e) {
+    return apiError(e);
   }
 }

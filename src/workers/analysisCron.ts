@@ -1,5 +1,6 @@
 import { connectDB } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
+import { toObjectId, userScope, listAnalysisCronUserIds } from "@/lib/tenant";
 import { topUsdcPairs, fetchCandles, fetch24h, fetchUsdcBalance, getSymbolInfo } from "@/lib/binance";
 import { computeIndicatorSnapshot, isIndicatorSnapshotValid } from "@/lib/indicators";
 import { buildAnalysisPrompt, callAI, resolveAiProfile, assertAiReady, safeParseJson } from "@/lib/ai";
@@ -41,11 +42,14 @@ async function hasCapitalForNewOrder(settings: Awaited<ReturnType<typeof getSett
 }
 
 /** Scheduled cron only: skip scan when no room or no USDC for a new order. */
-async function scheduledAnalysisPreflight(settings: Awaited<ReturnType<typeof getSettings>>): Promise<
+async function scheduledAnalysisPreflight(
+  userId: string,
+  settings: Awaited<ReturnType<typeof getSettings>>
+): Promise<
   | { ok: true; openCount: number; freeUsdc?: number }
   | { ok: false; decision: "NO_SLOTS" | "NO_CAPITAL"; reason: string; meta?: Record<string, unknown> }
 > {
-  const openCount = await Trade.countDocuments({ status: "OPEN" });
+  const openCount = await Trade.countDocuments(userScope(userId, { status: "OPEN" }));
   if (openCount >= settings.maxOpenPairs) {
     return {
       ok: false,
@@ -68,9 +72,22 @@ async function scheduledAnalysisPreflight(settings: Awaited<ReturnType<typeof ge
   return { ok: true, openCount, freeUsdc: capital.freeUsdc };
 }
 
-export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
+export async function runAnalysisCron(opts: { manual?: boolean; userId?: string } = {}) {
+  if (opts.userId) {
+    return runAnalysisCronForUser(opts.userId, opts);
+  }
+  const userIds = await listAnalysisCronUserIds();
+  if (userIds.length === 0) {
+    return { skipped: true, reason: "no users with pilot + analysis cron active" };
+  }
+  const results = await Promise.all(userIds.map((id) => runAnalysisCronForUser(id, opts)));
+  return userIds.length === 1 ? results[0] : { multi: true, results };
+}
+
+async function runAnalysisCronForUser(userId: string, opts: { manual?: boolean } = {}) {
   await connectDB();
-  const settings = await getSettings();
+  const settings = await getSettings(userId);
+  const uid = toObjectId(userId);
 
   if (!opts.manual) {
     if (!settings.pilotActive) {
@@ -84,10 +101,11 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
   }
 
   if (!opts.manual) {
-    const preflight = await scheduledAnalysisPreflight(settings);
+    const preflight = await scheduledAnalysisPreflight(userId, settings);
     if (preflight.ok === false) {
       console.log(`[analysisCron] skipped — ${preflight.reason}`);
       await AILog.create({
+        userId: uid,
         action: "CRON_END",
         decision: preflight.decision,
         reasoning: `Analysis skipped (scheduled): ${preflight.reason}`,
@@ -103,13 +121,13 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
     }
   }
 
-  await AILog.create({ action: "CRON_START", decision: "ANALYSIS", reasoning: "Market scan starting" });
+  await AILog.create({ userId: uid, action: "CRON_START", decision: "ANALYSIS", reasoning: "Market scan starting" });
 
   try {
     assertAiReady(settings, "analysis");
   } catch (e: any) {
     const msg = e?.message || "AI not configured";
-    await AILog.create({ action: "CRON_END", decision: "AI_CONFIG", reasoning: msg });
+    await AILog.create({ userId: uid, action: "CRON_END", decision: "AI_CONFIG", reasoning: msg });
     return { error: msg, analyzed: 0, opened: 0, reason: msg };
   }
 
@@ -120,7 +138,7 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
     pairsBeforeBlacklist = top.length;
     pairs = top.filter((x) => !isPairBlacklisted(x.symbol, settings.pairBlacklist));
   } catch (e: any) {
-    await AILog.create({ action: "ERROR", reasoning: `topUsdcPairs: ${e.message}` });
+    await AILog.create({ userId: uid, action: "ERROR", reasoning: `topUsdcPairs: ${e.message}` });
     return { error: e.message };
   }
 
@@ -131,6 +149,7 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
       ? "No USDC pairs on Binance testnet passed volume filter — check network or try live mode"
       : "No USDC pairs matched volume filter (Binance / network?)";
     await AILog.create({
+      userId: uid,
       action: "CRON_END",
       decision: "NO_PAIRS",
       reasoning: reason,
@@ -148,12 +167,12 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
       const p = queue.shift();
       if (!p) return;
       try {
-        const analysis = await analyzePair(p.symbol, settings);
+        const analysis = await analyzePair(userId, p.symbol, settings);
         results.push(analysis);
       } catch (e: any) {
         const msg = `${p.symbol}: ${e.message?.slice(0, 160) || "unknown error"}`;
         analyzeErrors.push(msg);
-        await AILog.create({ action: "ERROR", pair: p.symbol, reasoning: e.message?.slice(0, 200) });
+        await AILog.create({ userId: uid, action: "ERROR", pair: p.symbol, reasoning: e.message?.slice(0, 200) });
       }
     }
   }
@@ -163,7 +182,7 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
 
   // Trade decision pass
   const opened: any[] = [];
-  const openCount = await Trade.countDocuments({ status: "OPEN" });
+  const openCount = await Trade.countDocuments(userScope(userId, { status: "OPEN" }));
   let remainingSlots = Math.max(0, settings.maxOpenPairs - openCount);
 
   // Recommendation distribution (for diagnostics)
@@ -208,7 +227,7 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
       initialUsdc = await fetchUsdcBalance(settings.binanceTestnet);
       remainingUsdc = initialUsdc;
     } catch (e: any) {
-      await AILog.create({ action: "ERROR", reasoning: `fetchUsdcBalance: ${e.message?.slice(0, 200)}` });
+      await AILog.create({ userId: uid, action: "ERROR", reasoning: `fetchUsdcBalance: ${e.message?.slice(0, 200)}` });
       // Fail-safe: if we can't read balance, don't open anything
       remainingUsdc = 0;
     }
@@ -221,12 +240,12 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
       skipped.push(`${c.pair}: maxOpenPairs reached`);
       continue;
     }
-    const already = await Trade.findOne({ pair: c.pair, status: "OPEN" });
+    const already = await Trade.findOne(userScope(userId, { pair: c.pair, status: "OPEN" }));
     if (already) {
       skipped.push(`${c.pair}: already open`);
       continue;
     }
-    const cooldown = await pairReopenBlocked(c.pair, gate);
+    const cooldown = await pairReopenBlocked(userId, c.pair, gate);
     if (cooldown.blocked) {
       skipped.push(`${c.pair}: ${cooldown.reason}`);
       continue;
@@ -253,6 +272,7 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
 
     try {
       const t = await openPosition({
+        userId,
         pair: c.pair,
         usdcValue: settings.maxUsdcPerOrder,
         entryHint: c.price,
@@ -270,7 +290,7 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
       if (!settings.dryRun) remainingUsdc -= settings.maxUsdcPerOrder;
     } catch (e: any) {
       skipped.push(`${c.pair}: ${e.message?.slice(0, 80)}`);
-      await AILog.create({ action: "ERROR", pair: c.pair, reasoning: `open fail: ${e.message}` });
+      await AILog.create({ userId: uid, action: "ERROR", pair: c.pair, reasoning: `open fail: ${e.message}` });
     }
   }
 
@@ -300,6 +320,7 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
   }
 
   await AILog.create({
+    userId: uid,
     action: "CRON_END",
     decision: opened.length ? "OPENED" : insufficientCapital ? "NO_CAPITAL" : "NO_TRADE",
     reasoning: reason,
@@ -341,7 +362,8 @@ export async function runAnalysisCron(opts: { manual?: boolean } = {}) {
   };
 }
 
-async function analyzePair(symbol: string, settings: Awaited<ReturnType<typeof getSettings>>) {
+async function analyzePair(userId: string, symbol: string, settings: Awaited<ReturnType<typeof getSettings>>) {
+  const uid = toObjectId(userId);
   const { trend, entry } = resolveAnalysisIntervals(settings);
   const [cTrend, cEntry, t24] = await Promise.all([
     fetchCandles(symbol, trend, 100, settings.binanceTestnet),
@@ -396,6 +418,7 @@ async function analyzePair(symbol: string, settings: Awaited<ReturnType<typeof g
 
   if (!parsed) {
     await AILog.create({
+      userId: uid,
       action: "ERROR",
       pair: symbol,
       reasoning: `AI JSON parse failed: ${ai.text.slice(0, 180)}`,
@@ -404,6 +427,7 @@ async function analyzePair(symbol: string, settings: Awaited<ReturnType<typeof g
   }
 
   const doc = {
+    userId: uid,
     pair: symbol,
     analyzedAt: new Date(),
     interval: trend,
@@ -440,6 +464,7 @@ async function analyzePair(symbol: string, settings: Awaited<ReturnType<typeof g
 
   await Analysis.create(doc);
   await AILog.create({
+    userId: uid,
     action: "ANALYSIS",
     pair: symbol,
     decision: doc.recommendation,

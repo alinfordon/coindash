@@ -3,13 +3,17 @@ import { connectDB } from "@/lib/db";
 import { Trade } from "@/models/Trade";
 import { getSettings } from "@/lib/settings";
 import { fetchPrice } from "@/lib/binance";
+import { userScope } from "@/lib/tenant";
+import { getApiUserId, apiError } from "@/lib/apiUser";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  try {
   await connectDB();
-  const settings = await getSettings();
-  const trades = await Trade.find({ status: "OPEN" }).sort({ openedAt: -1 }).lean();
+  const userId = await getApiUserId();
+  const settings = await getSettings(userId);
+  const trades = await Trade.find(userScope(userId, { status: "OPEN" })).sort({ openedAt: -1 }).lean();
   const out = [];
   for (const t of trades) {
     let price = t.entryPrice as number;
@@ -31,4 +35,7 @@ export async function GET() {
     });
   }
   return NextResponse.json({ trades: out });
+  } catch (e) {
+    return apiError(e);
+  }
 }

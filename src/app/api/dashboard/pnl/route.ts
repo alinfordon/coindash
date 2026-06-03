@@ -2,11 +2,14 @@ import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/db";
 import { Trade } from "@/models/Trade";
 import { dashboardClosedTradeMatch } from "@/lib/dashboardTrades";
+import { getApiUserId, apiError } from "@/lib/apiUser";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
+  try {
   await connectDB();
+  const userId = await getApiUserId();
   const { searchParams } = new URL(req.url);
   const period = (searchParams.get("period") || "24h").toLowerCase();
   const now = Date.now();
@@ -32,7 +35,7 @@ export async function GET(req: Request) {
       bucketMs = 15 * 60_000;
   }
 
-  const trades = await Trade.find({ ...dashboardClosedTradeMatch(), closedAt: { $gte: since } })
+  const trades = await Trade.find({ ...dashboardClosedTradeMatch(userId), closedAt: { $gte: since } })
     .sort({ closedAt: 1 })
     .lean();
 
@@ -57,4 +60,7 @@ export async function GET(req: Request) {
   }
 
   return NextResponse.json({ period, series: buckets });
+  } catch (e) {
+    return apiError(e);
+  }
 }

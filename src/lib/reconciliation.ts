@@ -11,6 +11,7 @@ import {
   cancelOco,
 } from "./binance";
 import type { RuntimeSettings } from "./settings";
+import { toObjectId, userScope } from "./tenant";
 
 export type ReconcileResult = {
   pair: string;
@@ -280,12 +281,15 @@ async function classifyAssetTrades(
  * Syncs DB OPEN trades with Binance balances and OCO state.
  * Filled OCO → TP_HIT / SL_HIT. Multiple OPEN rows on same asset share balance (FIFO).
  */
-export async function reconcileOpenTrades(settings: RuntimeSettings): Promise<{
+export async function reconcileOpenTrades(
+  userId: string,
+  settings: RuntimeSettings
+): Promise<{
   closed: ReconcileResult[];
   kept: number;
   errors: { pair: string; error: string }[];
 }> {
-  const open = (await Trade.find({ status: "OPEN" }).lean()) as OpenTrade[];
+  const open = (await Trade.find(userScope(userId, { status: "OPEN" })).lean()) as OpenTrade[];
   const closed: ReconcileResult[] = [];
   const errors: { pair: string; error: string }[] = [];
   let kept = 0;
@@ -360,6 +364,7 @@ export async function reconcileOpenTrades(settings: RuntimeSettings): Promise<{
           });
 
           await AILog.create({
+            userId: toObjectId(userId),
             action: "RECONCILE",
             pair,
             decision: resolved.closedReason,
@@ -421,11 +426,12 @@ export async function reconcileOpenTrades(settings: RuntimeSettings): Promise<{
 
 /** Re-label historical RECONCILED closes when Binance fill evidence exists. */
 export async function reclassifyReconciledTrades(
+  userId: string,
   settings: RuntimeSettings,
   opts: { limit?: number; since?: Date } = {}
 ): Promise<{ scanned: number; updated: number; skipped: number; samples: { pair: string; from: string; to: string }[] }> {
   const limit = Math.min(Math.max(opts.limit ?? 500, 1), 5000);
-  const filter: Record<string, unknown> = { status: "CLOSED", closedReason: "RECONCILED" };
+  const filter: Record<string, unknown> = userScope(userId, { status: "CLOSED", closedReason: "RECONCILED" });
   if (opts.since) filter.closedAt = { $gte: opts.since };
 
   const trades = (await Trade.find(filter).sort({ closedAt: -1 }).limit(limit).lean()) as (OpenTrade & {
@@ -467,6 +473,7 @@ export async function reclassifyReconciledTrades(
 
 /** Process all RECONCILED rows in batches (exchange-evidence only). */
 export async function reclassifyAllReconciledTrades(
+  userId: string,
   settings: RuntimeSettings,
   opts: { since?: Date; maxBatches?: number } = {}
 ): Promise<{ scanned: number; updated: number; skipped: number; batches: number }> {
@@ -477,7 +484,7 @@ export async function reclassifyAllReconciledTrades(
   let batches = 0;
 
   for (let i = 0; i < maxBatches; i++) {
-    const r = await reclassifyReconciledTrades(settings, { limit: 500, since: opts.since });
+    const r = await reclassifyReconciledTrades(userId, settings, { limit: 500, since: opts.since });
     scanned += r.scanned;
     updated += r.updated;
     skipped += r.skipped;

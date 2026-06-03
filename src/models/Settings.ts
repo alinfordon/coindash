@@ -2,6 +2,7 @@ import mongoose, { Schema, models, model } from "mongoose";
 
 const SettingsSchema = new Schema(
   {
+    userId: { type: Schema.Types.ObjectId, ref: "User", required: true, unique: true, index: true },
     aiProvider: { type: String, enum: ["claude", "gemini", "zai", "ollama"], default: "claude" },
     aiModel: { type: String, default: "claude-sonnet-4-5" },
     /** Empty = use aiModel. Used only by analysis cron (market scan). */

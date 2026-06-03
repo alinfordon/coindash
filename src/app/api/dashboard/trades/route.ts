@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/db";
 import { Trade } from "@/models/Trade";
 import { dashboardClosedTradeMatch } from "@/lib/dashboardTrades";
+import { getApiUserId, apiError } from "@/lib/apiUser";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +12,9 @@ export const dynamic = "force-dynamic";
  * Periods: 1d | 7d | 30d | 1y.
  */
 export async function GET(req: Request) {
+  try {
   await connectDB();
+  const userId = await getApiUserId();
   const { searchParams } = new URL(req.url);
   const period = (searchParams.get("period") || "1d").toLowerCase();
 
@@ -32,7 +35,7 @@ export async function GET(req: Request) {
       since = new Date(now - 86400_000);
   }
 
-  const trades = await Trade.find({ ...dashboardClosedTradeMatch(), closedAt: { $gte: since } })
+  const trades = await Trade.find({ ...dashboardClosedTradeMatch(userId), closedAt: { $gte: since } })
     .sort({ closedAt: 1 })
     .lean();
 
@@ -49,4 +52,7 @@ export async function GET(req: Request) {
   const totalPnl = +series.reduce((a, s) => a + s.pnl, 0).toFixed(4);
 
   return NextResponse.json({ period, series, wins, losses, totalPnl });
+  } catch (e) {
+    return apiError(e);
+  }
 }

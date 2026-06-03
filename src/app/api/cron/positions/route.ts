@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { getToken } from "next-auth/jwt";
 import { runPositionCron } from "@/workers/positionCron";
 import { checkCronAuth } from "@/lib/cronAuth";
 
@@ -14,7 +15,9 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
   const url = new URL(req.url);
   const force = url.searchParams.get("force") === "1" || url.searchParams.get("manual") === "1";
-  const r = await runPositionCron({ manual: force });
+  const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
+  const userId = force && token?.uid ? String(token.uid) : undefined;
+  const r = await runPositionCron({ manual: force, userId });
   return NextResponse.json(r);
 }
 

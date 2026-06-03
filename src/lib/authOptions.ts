@@ -1,6 +1,6 @@
 import { type AuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
-import bcrypt from "bcryptjs";
+import { authenticateUser, ensureBootstrapAdmin } from "./users";
 
 export const authOptions: AuthOptions = {
   session: { strategy: "jwt", maxAge: 60 * 60 * 24 * 7 },
@@ -9,38 +9,45 @@ export const authOptions: AuthOptions = {
     CredentialsProvider({
       name: "Credentials",
       credentials: {
-        username: { label: "Username", type: "text" },
+        email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
       },
       async authorize(creds) {
-        if (!creds?.username || !creds?.password) return null;
+        if (!creds?.email || !creds?.password) return null;
 
-        const expectedUser = process.env.ADMIN_USERNAME || "admin";
-        if (creds.username !== expectedUser) {
+        await ensureBootstrapAdmin();
+        const user = await authenticateUser(creds.email, creds.password);
+        if (!user) {
           await new Promise((r) => setTimeout(r, 400));
           return null;
         }
 
-        const hash = process.env.ADMIN_PASSWORD_HASH;
-        if (hash) {
-          const ok = await bcrypt.compare(creds.password, hash);
-          return ok ? { id: "admin", name: expectedUser } : null;
-        }
-
-        const plain = process.env.ADMIN_PASSWORD || "admin";
-        if (creds.password === plain) return { id: "admin", name: expectedUser };
-        return null;
+        const role: "admin" | "user" = user.role === "admin" ? "admin" : "user";
+        return {
+          id: String(user._id),
+          name: user.name,
+          email: user.email,
+          role,
+        };
       },
     }),
   ],
   pages: { signIn: "/login" },
   callbacks: {
     async jwt({ token, user }) {
-      if (user) token.uid = user.id;
+      if (user) {
+        token.uid = user.id;
+        token.role = (user as { role?: "admin" | "user" }).role;
+        token.email = user.email;
+      }
       return token;
     },
     async session({ session, token }) {
-      if (session.user) session.user.id = token.uid;
+      if (session.user) {
+        session.user.id = token.uid;
+        session.user.role = token.role as "admin" | "user" | undefined;
+        session.user.email = token.email ?? session.user.email;
+      }
       return session;
     },
   },

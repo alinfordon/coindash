@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import { Sidebar, MobileNav } from "./Sidebar";
 import { TopBar } from "./TopBar";
 
-const CHROMELESS = ["/login"];
+const CHROMELESS = ["/login", "/invite"];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() || "";

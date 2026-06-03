@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSettings } from "@/lib/settings";
 import { fetchAll24h } from "@/lib/binance";
+import { getApiUserId, apiError } from "@/lib/apiUser";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +22,9 @@ async function getFearGreed() {
 }
 
 export async function GET() {
-  const settings = await getSettings();
+  try {
+  const userId = await getApiUserId();
+  const settings = await getSettings(userId);
   let all: any[] = [];
   try {
     all = await fetchAll24h(settings.binanceTestnet);
@@ -45,4 +48,7 @@ export async function GET() {
     topGainers: topGainers.map((t) => ({ symbol: t.symbol, change: t.priceChangePercent, price: t.lastPrice })),
     topLosers: topLosers.map((t) => ({ symbol: t.symbol, change: t.priceChangePercent, price: t.lastPrice })),
   });
+  } catch (e) {
+    return apiError(e);
+  }
 }

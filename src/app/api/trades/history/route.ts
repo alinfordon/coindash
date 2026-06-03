@@ -2,11 +2,14 @@ import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/db";
 import { Trade } from "@/models/Trade";
 import { dashboardClosedTradeMatch } from "@/lib/dashboardTrades";
+import { getApiUserId, apiError } from "@/lib/apiUser";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
+  try {
   await connectDB();
+  const userId = await getApiUserId();
   const { searchParams } = new URL(req.url);
   const pair = searchParams.get("pair");
   const outcome = searchParams.get("outcome"); // "profit" | "loss"
@@ -16,7 +19,7 @@ export async function GET(req: Request) {
   const closedReason = searchParams.get("closedReason");
   const limit = Math.min(Math.max(1, +(searchParams.get("limit") || 25) || 25), 100);
 
-  const q: Record<string, unknown> = { ...dashboardClosedTradeMatch() };
+  const q: Record<string, unknown> = { ...dashboardClosedTradeMatch(userId) };
   if (pair) q.pair = pair;
   if (aiModel) q.aiModel = aiModel;
   if (from || to) {
@@ -92,4 +95,7 @@ export async function GET(req: Request) {
       slCount: s?.slCount ?? 0,
     },
   });
+  } catch (e) {
+    return apiError(e);
+  }
 }
