@@ -12,6 +12,9 @@ import {
 } from "@/lib/tzCalendar";
 import { getSettings } from "@/lib/settings";
 import { fetchPortfolioValueUsdc } from "@/lib/binance";
+import { toObjectId } from "@/lib/tenant";
+
+export const RECENT_TRADES_LIMIT = 25;
 
 /** Canonical closed-trade PnL (maps DB `pnlUsdc` → analytics `pnl`). */
 export type ClosedTradePnL = {
@@ -596,7 +599,7 @@ export async function computeAnalyticsReport(filters: AnalyticsFilters): Promise
         orderedPnls: [{ $sort: { closedAt: 1 } }, { $project: { _id: 0, p: pnlExpr(), d: durationMinutesExpr() } }],
         recentClosed: [
           { $sort: { closedAt: -1 } },
-          { $limit: 80 },
+          { $limit: RECENT_TRADES_LIMIT },
           {
             $project: {
               _id: 1,
@@ -935,7 +938,7 @@ export async function computeAnalyticsReport(filters: AnalyticsFilters): Promise
   let recentTrades: RecentTradeRow[] = (f.recentClosed || []).map(rowToRecent);
 
   if (filters.includeOpenInRecent) {
-    const openMatch: FilterQuery<TradeDoc> = { userId: filters.userId, status: "OPEN" };
+    const openMatch: FilterQuery<TradeDoc> = { userId: toObjectId(filters.userId), status: "OPEN" };
     if (filters.pair && filters.pair !== "__all__") (openMatch as any).pair = filters.pair;
     if (filters.strategy && filters.strategy !== "__all__") {
       const s = filters.strategy;
@@ -944,7 +947,7 @@ export async function computeAnalyticsReport(filters: AnalyticsFilters): Promise
     }
     const openRows = await Trade.find(openMatch)
       .sort({ openedAt: -1 })
-      .limit(80)
+      .limit(RECENT_TRADES_LIMIT)
       .select({
         pair: 1,
         side: 1,
@@ -973,9 +976,11 @@ export async function computeAnalyticsReport(filters: AnalyticsFilters): Promise
     );
 
     const byTs = (x: RecentTradeRow) => Math.max(new Date(x.closedAt || 0).getTime(), new Date(x.openedAt || 0).getTime());
-    recentTrades = [...recentTrades, ...openMapped].sort((a, b) => byTs(b) - byTs(a)).slice(0, 50);
+    recentTrades = [...recentTrades, ...openMapped]
+      .sort((a, b) => byTs(b) - byTs(a))
+      .slice(0, RECENT_TRADES_LIMIT);
   } else {
-    recentTrades = recentTrades.slice(0, 50);
+    recentTrades = recentTrades.slice(0, RECENT_TRADES_LIMIT);
   }
 
   const insights = buildInsights(metrics, baselineWinRate, topPairs[0], worstPairs[0]);

@@ -181,12 +181,13 @@ export default function SettingsPage() {
     try {
       const r = await fetch("/api/settings", { method: "POST", body: JSON.stringify(form) });
       const j = await r.json();
+      if (!r.ok || j.ok === false) throw new Error(j.error || `Save failed (${r.status})`);
       toast.success("Settings saved");
       setForm(j);
       mutate(j);
       setConfirmBinance(false);
     } catch (e: any) {
-      toast.error(e.message);
+      toast.error(e.message || "Save failed");
     } finally {
       setSaving(false);
     }

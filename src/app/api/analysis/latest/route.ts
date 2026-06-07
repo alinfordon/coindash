@@ -3,6 +3,7 @@ import { connectDB } from "@/lib/db";
 import { Analysis } from "@/models/Analysis";
 import { toObjectId } from "@/lib/tenant";
 import { getApiUserId, apiError } from "@/lib/apiUser";
+import { localizeAnalysisDisplay } from "@/lib/analysisLocale";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +25,15 @@ export async function GET() {
       { $sort: { confidence: -1, analyzedAt: -1 } },
       { $limit: 100 },
     ]);
-    return NextResponse.json({ analyses: docs });
+    const analyses = docs.map((doc) => {
+      const localized = localizeAnalysisDisplay(
+        doc.reasoning ?? "",
+        doc.pair ?? "",
+        doc.keyFactors ?? []
+      );
+      return { ...doc, reasoning: localized.reasoning, keyFactors: localized.keyFactors };
+    });
+    return NextResponse.json({ analyses });
   } catch (e) {
     return apiError(e);
   }

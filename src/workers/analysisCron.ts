@@ -4,6 +4,7 @@ import { toObjectId, userScope, listAnalysisCronUserIds } from "@/lib/tenant";
 import { topUsdcPairs, fetchCandles, fetch24h, fetchUsdcBalance, getSymbolInfo } from "@/lib/binance";
 import { computeIndicatorSnapshot, isIndicatorSnapshotValid } from "@/lib/indicators";
 import { buildAnalysisPrompt, callAI, resolveAiProfile, assertAiReady, safeParseJson } from "@/lib/ai";
+import { ensureRomanianAnalysisCopy } from "@/lib/analysisLocale";
 import { Analysis } from "@/models/Analysis";
 import { AILog } from "@/models/AILog";
 import { Trade } from "@/models/Trade";
@@ -426,6 +427,12 @@ async function analyzePair(userId: string, symbol: string, settings: Awaited<Ret
     });
   }
 
+  const localized = await ensureRomanianAnalysisCopy(settings, {
+    reasoning: parsed?.reasoning ?? "",
+    keyFactors: parsed?.keyFactors ?? [],
+    pair: symbol,
+  });
+
   const doc = {
     userId: uid,
     pair: symbol,
@@ -437,9 +444,9 @@ async function analyzePair(userId: string, symbol: string, settings: Awaited<Ret
     combinedScore: parsed?.technicalScore ?? 0,
     recommendation: (parsed?.recommendation as any) ?? "HOLD",
     confidence: parsed?.confidence ?? 0,
-    reasoning: parsed?.reasoning ?? "",
+    reasoning: localized.reasoning,
     riskLevel: (parsed?.riskLevel as any) ?? "MEDIUM",
-    keyFactors: parsed?.keyFactors ?? [],
+    keyFactors: localized.keyFactors,
     price: snap.price,
     indicators: {
       rsi: snap.rsi,

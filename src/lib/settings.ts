@@ -4,7 +4,7 @@ import { decrypt, encrypt } from "./crypto";
 import { fetchPortfolioValueUsdc } from "./binance";
 import { normalizePairBlacklistEntries } from "./pairBlacklistCore";
 import { geminiModelMigrationPatch } from "./aiModels";
-import { migrateLegacyTenantData, toObjectId } from "./tenant";
+import { dedupeSettingsPerUser, migrateLegacyTenantData, toObjectId } from "./tenant";
 import { User } from "@/models/User";
 
 export type RuntimeSettings = {
@@ -47,6 +47,87 @@ export type RuntimeSettings = {
 
 const SECRET_FIELDS = ["aiApiKey", "binanceApiKey", "binanceApiSecret", "telegramBotToken"] as const;
 
+const PATCH_KEYS = [
+  "aiProvider",
+  "aiModel",
+  "analysisAiModel",
+  "aiApiKey",
+  "ollamaUrl",
+  "zaiBaseUrl",
+  "binanceApiKey",
+  "binanceApiSecret",
+  "binanceTestnet",
+  "pilotActive",
+  "positionCheckCronActive",
+  "analysisCronActive",
+  "dryRun",
+  "maxOpenPairs",
+  "maxUsdcPerOrder",
+  "minConfidence",
+  "entryGateEnabled",
+  "minTechnicalScore",
+  "requireStrongBuyOnly",
+  "maxPump24hPct",
+  "slCooldownMinutes",
+  "tpReopenCooldownMinutes",
+  "defaultReopenCooldownMinutes",
+  "analysisTrendInterval",
+  "analysisEntryInterval",
+  "stopLossPercent",
+  "takeProfitPercent",
+  "riskRewardRatio",
+  "telegramBotToken",
+  "telegramChatId",
+  "displayTimezone",
+  "pairBlacklist",
+] as const;
+
+const NUMERIC_PATCH_KEYS = new Set([
+  "maxOpenPairs",
+  "maxUsdcPerOrder",
+  "minConfidence",
+  "minTechnicalScore",
+  "maxPump24hPct",
+  "slCooldownMinutes",
+  "tpReopenCooldownMinutes",
+  "defaultReopenCooldownMinutes",
+  "stopLossPercent",
+  "takeProfitPercent",
+  "riskRewardRatio",
+]);
+
+const BOOL_PATCH_KEYS = new Set([
+  "binanceTestnet",
+  "pilotActive",
+  "positionCheckCronActive",
+  "analysisCronActive",
+  "dryRun",
+  "entryGateEnabled",
+  "requireStrongBuyOnly",
+]);
+
+/** Strip Mongo metadata and read-only fields sent back from the Settings UI. */
+export function sanitizeSettingsPatch(patch: Record<string, unknown>): Partial<RuntimeSettings> {
+  const out: Record<string, unknown> = {};
+  for (const key of PATCH_KEYS) {
+    if (!(key in patch)) continue;
+    let v = patch[key];
+    if (NUMERIC_PATCH_KEYS.has(key)) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) continue;
+      v = n;
+    } else if (BOOL_PATCH_KEYS.has(key)) {
+      v = v === true || v === "true";
+    } else if (key === "pairBlacklist" && Array.isArray(v)) {
+      v = normalizePairBlacklistEntries(v);
+    } else if (typeof v === "string") {
+      v = v.trim();
+    }
+    out[key] = v;
+  }
+  return out as Partial<RuntimeSettings>;
+}
+
 function defaultSettingsPayload(fromEnv: boolean) {
   return {
     aiProvider: (process.env.AI_PROVIDER as RuntimeSettings["aiProvider"]) || "claude",
@@ -76,7 +157,13 @@ function defaultSettingsPayload(fromEnv: boolean) {
 }
 
 function docToRuntime(doc: Record<string, unknown>): RuntimeSettings {
-  const out: any = { ...doc };
+  const out: any = {};
+  for (const key of PATCH_KEYS) {
+    if (key in doc) out[key] = doc[key];
+  }
+  if (doc.cashBalanceUsdc != null) out.cashBalanceUsdc = Number(doc.cashBalanceUsdc) || 0;
+  if (doc.cashBalanceUpdatedAt != null) out.cashBalanceUpdatedAt = doc.cashBalanceUpdatedAt as Date;
+  if (doc.updatedAt != null) out.updatedAt = doc.updatedAt as Date;
   for (const f of SECRET_FIELDS) out[f] = decrypt((out[f] as string) || "");
   out.pairBlacklist = normalizePairBlacklistEntries(out.pairBlacklist);
   return out as RuntimeSettings;
@@ -85,21 +172,24 @@ function docToRuntime(doc: Record<string, unknown>): RuntimeSettings {
 export async function getSettings(userId: string): Promise<RuntimeSettings> {
   await connectDB();
   await migrateLegacyTenantData();
+  await dedupeSettingsPerUser();
 
   const uid = toObjectId(userId);
-  let doc = await Settings.findOne({ userId: uid }).lean();
+  let doc: Record<string, unknown> | null = (await Settings.findOne({ userId: uid })
+    .sort({ updatedAt: -1 })
+    .lean()) as Record<string, unknown> | null;
 
   if (!doc) {
     const userCount = await User.countDocuments();
     const fromEnv = userCount <= 1;
-    const created = await Settings.create({
-      userId: uid,
-      ...defaultSettingsPayload(fromEnv),
-    });
-    doc = created.toObject();
+    doc = (await Settings.findOneAndUpdate(
+      { userId: uid },
+      { $setOnInsert: { userId: uid, ...defaultSettingsPayload(fromEnv) } },
+      { upsert: true, new: true }
+    ).lean()) as Record<string, unknown>;
   }
 
-  const out = docToRuntime(doc as Record<string, unknown>);
+  const out = docToRuntime(doc);
 
   const geminiPatch = geminiModelMigrationPatch(out.aiProvider, out.aiModel, out.analysisAiModel);
   if (geminiPatch) {
@@ -115,11 +205,12 @@ export async function getSettings(userId: string): Promise<RuntimeSettings> {
 
 export async function updateSettings(
   userId: string,
-  patch: Partial<RuntimeSettings>
+  patch: Partial<RuntimeSettings> | Record<string, unknown>
 ): Promise<RuntimeSettings> {
   await connectDB();
+  await dedupeSettingsPerUser();
   const uid = toObjectId(userId);
-  const update: any = { ...patch };
+  const update: any = sanitizeSettingsPatch(patch as Record<string, unknown>);
   if ("pairBlacklist" in update && Array.isArray(update.pairBlacklist)) {
     update.pairBlacklist = normalizePairBlacklistEntries(update.pairBlacklist);
   }
@@ -134,11 +225,23 @@ export async function updateSettings(
       update[f] = update[f] ? encrypt(update[f]) : "";
     }
   }
+  if (!Object.keys(update).length) {
+    const existing = await Settings.findOne({ userId: uid }).lean();
+    if (!existing) throw new Error("Nothing to save");
+    const out = docToRuntime(existing as Record<string, unknown>);
+    syncToEnv(out);
+    return out;
+  }
+
+  const setOnInsert: Record<string, unknown> = { userId: uid, ...defaultSettingsPayload(false) };
+  for (const key of Object.keys(update)) delete setOnInsert[key];
+
   const doc = await Settings.findOneAndUpdate(
     { userId: uid },
-    { $set: update, $setOnInsert: { userId: uid, ...defaultSettingsPayload(false) } },
-    { new: true, upsert: true }
+    { $set: update, $setOnInsert: setOnInsert },
+    { new: true, upsert: true, runValidators: true }
   ).lean();
+  if (!doc) throw new Error("Settings save failed");
   const out = docToRuntime(doc as Record<string, unknown>);
   syncToEnv(out);
   return out;

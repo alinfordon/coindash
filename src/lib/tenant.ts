@@ -7,7 +7,63 @@ import { AILog } from "@/models/AILog";
 import { User } from "@/models/User";
 import { ensureBootstrapAdmin } from "./users";
 
-const g = global as typeof globalThis & { __NEXUS_TENANT_MIGRATED__?: boolean };
+const g = global as typeof globalThis & {
+  __NEXUS_TENANT_MIGRATED__?: boolean;
+  __NEXUS_SETTINGS_DEDUPED__?: boolean;
+  __NEXUS_SETTINGS_INDEXED__?: boolean;
+};
+
+/** One settings doc per user + unique index (fixes duplicate upserts). */
+export async function dedupeSettingsPerUser(): Promise<void> {
+  if (g.__NEXUS_SETTINGS_DEDUPED__) return;
+  await connectDB();
+
+  if (!g.__NEXUS_SETTINGS_INDEXED__) {
+    try {
+      await Settings.collection.createIndex({ userId: 1 }, { unique: true, background: true });
+    } catch (e: any) {
+      // If duplicates still exist, dedupe first then retry below.
+      if (!/duplicate key|E11000/i.test(e?.message || "")) {
+        console.warn("[settings] userId index:", e?.message);
+      }
+    }
+    g.__NEXUS_SETTINGS_INDEXED__ = true;
+  }
+
+  const dupGroups = await Settings.aggregate([
+    { $match: { userId: { $exists: true, $ne: null } } },
+    { $sort: { updatedAt: -1 } },
+    {
+      $group: {
+        _id: "$userId",
+        keep: { $first: "$_id" },
+        drop: { $push: "$_id" },
+        count: { $sum: 1 },
+      },
+    },
+    { $match: { count: { $gt: 1 } } },
+  ]);
+
+  let removed = 0;
+  for (const g of dupGroups) {
+    const dropIds = (g.drop as mongoose.Types.ObjectId[]).filter((id) => String(id) !== String(g.keep));
+    if (dropIds.length) {
+      const r = await Settings.deleteMany({ _id: { $in: dropIds } });
+      removed += r.deletedCount || 0;
+    }
+  }
+
+  if (removed > 0) {
+    console.log(`[settings] removed ${removed} duplicate settings document(s)`);
+    try {
+      await Settings.collection.createIndex({ userId: 1 }, { unique: true, background: true });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  g.__NEXUS_SETTINGS_DEDUPED__ = true;
+}
 
 /** Assign legacy global rows to the first admin user (once per process). */
 export async function migrateLegacyTenantData(): Promise<void> {

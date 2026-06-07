@@ -18,13 +18,14 @@ export async function POST(req: Request) {
   try {
     const userId = await getApiUserId();
     const body = await req.json();
-    const patch: any = { ...body };
+    const patch: Record<string, unknown> = { ...body };
     for (const k of ["aiApiKey", "binanceApiKey", "binanceApiSecret", "telegramBotToken"]) {
-      if (typeof patch[k] === "string" && patch[k].includes("•")) delete patch[k];
+      if (typeof patch[k] === "string" && (patch[k] as string).includes("•")) delete patch[k];
     }
     const s = await updateSettings(userId, patch);
     return NextResponse.json(redact(s));
   } catch (e) {
+    console.error("[api/settings] POST", e);
     return apiError(e);
   }
 }

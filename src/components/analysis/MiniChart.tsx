@@ -1,15 +1,27 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { baseUrl } from "@/lib/binance";
 
-export function MiniCandles({ symbol, testnet }: { symbol: string; testnet?: boolean }) {
+type Props = {
+  symbol: string;
+  testnet?: boolean;
+  /** Candle interval for the chart (should match analysis trend TF when possible). */
+  interval?: string;
+};
+
+export function MiniCandles({ symbol, testnet = false, interval = "1h" }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
+  const [status, setStatus] = useState<"loading" | "ok" | "error">("loading");
 
   useEffect(() => {
     let cancelled = false;
+    let resizeHandler: (() => void) | null = null;
+
     async function init() {
       if (!ref.current) return;
+      setStatus("loading");
       const { createChart, ColorType } = await import("lightweight-charts");
       if (cancelled) return;
       ref.current.innerHTML = "";
@@ -38,9 +50,11 @@ export function MiniCandles({ symbol, testnet }: { symbol: string; testnet?: boo
         wickDownColor: "#FF3366",
       });
       try {
-        const base = testnet ? "https://testnet.binance.vision" : "https://api.binance.com";
-        const r = await fetch(`${base}/api/v3/klines?symbol=${symbol}&interval=1h&limit=120`);
+        const api = baseUrl(testnet);
+        const r = await fetch(`${api}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=120`);
+        if (!r.ok) throw new Error(`klines ${r.status}`);
         const d: any[] = await r.json();
+        if (!Array.isArray(d) || d.length === 0) throw new Error("no candles");
         const data = d.map((c) => ({
           time: Math.floor(c[0] / 1000) as any,
           open: +c[1],
@@ -50,21 +64,37 @@ export function MiniCandles({ symbol, testnet }: { symbol: string; testnet?: boo
         }));
         series.setData(data);
         chart.timeScale().fitContent();
-      } catch {}
-      const onResize = () => {
+        if (!cancelled) setStatus("ok");
+      } catch {
+        if (!cancelled) setStatus("error");
+      }
+      resizeHandler = () => {
         if (ref.current) chart.applyOptions({ width: ref.current.clientWidth });
       };
-      window.addEventListener("resize", onResize);
-      return () => {
-        window.removeEventListener("resize", onResize);
-      };
+      window.addEventListener("resize", resizeHandler);
     }
+
     init();
     return () => {
       cancelled = true;
+      if (resizeHandler) window.removeEventListener("resize", resizeHandler);
       chartRef.current?.remove?.();
     };
-  }, [symbol, testnet]);
+  }, [symbol, testnet, interval]);
 
-  return <div ref={ref} className="w-full" />;
+  return (
+    <div className="relative w-full">
+      {status === "loading" && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center text-[10px] mono text-text-muted bg-surface/40 rounded-lg">
+          Loading {interval} candles…
+        </div>
+      )}
+      {status === "error" && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center text-[10px] mono text-danger/90 bg-surface/60 rounded-lg px-3 text-center">
+          Chart unavailable ({testnet ? "testnet" : "live"} · {symbol})
+        </div>
+      )}
+      <div ref={ref} className="w-full min-h-[220px]" />
+    </div>
+  );
 }

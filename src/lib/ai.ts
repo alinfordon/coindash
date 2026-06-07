@@ -180,28 +180,42 @@ Trend (last 5 candles): ${d.trendEntry ?? "n/a"}
 `
       : "";
 
-  return `You are an expert crypto trading analyst. Analyze ${d.pair} and provide a trading recommendation.
+  const token = (() => {
+    if (!/USDC$/i.test(d.pair)) return d.pair;
+    const base = d.pair.replace(/USDC$/i, "");
+    return !base || base.length <= 2 ? d.pair : base;
+  })();
 
-TECHNICAL DATA (${d.trendInterval.toUpperCase()} timeframe, last 100 candles — trend context):
-Current Price: ${d.price}
+  return `Ești un analist crypto expert. Analizează ${d.pair} și oferă o recomandare de trading.
+
+DATE TEHNICE (${d.trendInterval.toUpperCase()}, ultimele 100 candle-uri — context trend):
+Preț curent: ${d.price}
 RSI(14): ${num(d.rsi)}
 MACD: value=${num(d.macdValue)}, signal=${num(d.macdSignal)}, histogram=${num(d.macdHist)}
-Bollinger Bands: upper=${num(d.bbUpper)}, middle=${num(d.bbMiddle)}, lower=${num(d.bbLower)}
+Bollinger: upper=${num(d.bbUpper)}, middle=${num(d.bbMiddle)}, lower=${num(d.bbLower)}
 EMA20: ${num(d.ema20)}, EMA50: ${num(d.ema50)}
-Price vs EMA20: ${num(d.priceVsEma20)}%
-Price vs EMA50: ${num(d.priceVsEma50)}%
+Preț vs EMA20: ${num(d.priceVsEma20)}%
+Preț vs EMA50: ${num(d.priceVsEma50)}%
 ${entryBlock}
-MARKET DATA:
-24h Change: ${num(d.change24h)}%
-24h Volume: $${num(d.volume24h, 0)}
-24h High: ${num(d.high24h)}, Low: ${num(d.low24h)}
+PIAȚĂ:
+Variație 24h: ${num(d.change24h)}%
+Volum 24h: $${num(d.volume24h, 0)}
+Max 24h: ${num(d.high24h)}, Min 24h: ${num(d.low24h)}
 
-Respond ONLY with valid JSON:
+REGULI OBLIGATORII:
+- "reasoning" și fiecare element din "keyFactors" TREBUIE să fie în limba română (nu folosi engleza).
+- Păstrează în engleză doar cheile JSON și valorile enum: recommendation, riskLevel.
+- Pentru stablecoin-uri (ex. ${token} legat de USD): explică în română lipsa potențialului de creștere.
+
+Exemplu pentru stablecoin:
+"reasoning": "${token} este un stablecoin legat de dolar. Datele actuale arată abatere minimă, reflectând stabilitatea pieței, fără potențial de creștere."
+
+Răspunde DOAR cu JSON valid:
 {
   "recommendation": "STRONG_BUY|BUY|HOLD|SELL|STRONG_SELL",
   "confidence": 0-100,
   "technicalScore": -100 to 100,
-  "reasoning": "concise explanation max 150 chars",
+  "reasoning": "explicație concisă în română, max 150 caractere",
   "keyFactors": ["factor1", "factor2", "factor3"],
   "riskLevel": "LOW|MEDIUM|HIGH"
 }`;
