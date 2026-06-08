@@ -217,7 +217,8 @@ async function runAnalysisCronForUser(userId: string, opts: { manual?: boolean }
     return true;
   });
   const candidates = [...gated].sort(compareBuyCandidates);
-  const bestBuy = candidates[0] ?? confidenceFiltered.sort(compareBuyCandidates)[0];
+  const bestBuySignal = [...buys].sort(compareBuyCandidates)[0] ?? null;
+  const bestBuy = candidates[0] ?? [...confidenceFiltered].sort(compareBuyCandidates)[0] ?? null;
 
   // Capital check: how much USDC is actually free on Binance?
   // Only enforced in live mode. In dry run we skip the balance gate.
@@ -311,7 +312,11 @@ async function runAnalysisCronForUser(userId: string, opts: { manual?: boolean }
   } else if (candidates.length === 0 && confidenceFiltered.length > 0) {
     reason = `${confidenceFiltered.length} BUY cleared confidence but entry gate blocked all. Gate: ${gateSkipped.slice(0, 4).join(" | ")}`;
   } else if (candidates.length === 0) {
-    reason = `${buys.length} BUY signal(s) but none cleared minConfidence=${settings.minConfidence}%. Best: ${bestBuy?.pair} ${bestBuy?.recommendation} ${bestBuy?.confidence}%`;
+    const best = bestBuySignal;
+    const bestLabel = best
+      ? `${best.pair} ${best.recommendation} ${best.confidence ?? 0}%`
+      : "n/a";
+    reason = `${buys.length} BUY signal(s) but none cleared minConfidence=${settings.minConfidence}%. Best: ${bestLabel}`;
   } else if (remainingSlots <= 0 && openCount > 0) {
     reason = `Slot cap reached: ${openCount}/${settings.maxOpenPairs} open. Best candidate skipped: ${candidates[0]?.pair} ${candidates[0]?.confidence}%`;
   } else if (insufficientCapital && initialUsdc !== null) {
@@ -336,7 +341,11 @@ async function runAnalysisCronForUser(userId: string, opts: { manual?: boolean }
       opened: opened.length,
       openCount,
       remainingSlotsBefore: settings.maxOpenPairs - openCount,
-      bestBuy: bestBuy ? { pair: bestBuy.pair, conf: bestBuy.confidence, rec: bestBuy.recommendation } : null,
+      bestBuy: bestBuy
+        ? { pair: bestBuy.pair, conf: bestBuy.confidence, rec: bestBuy.recommendation }
+        : bestBuySignal
+          ? { pair: bestBuySignal.pair, conf: bestBuySignal.confidence, rec: bestBuySignal.recommendation, belowMinConfidence: true }
+          : null,
       usdcFree: initialUsdc,
       insufficientCapital,
     },
@@ -355,7 +364,17 @@ async function runAnalysisCronForUser(userId: string, opts: { manual?: boolean }
     openCount,
     maxOpenPairs: settings.maxOpenPairs,
     minConfidence: settings.minConfidence,
-    bestBuy: bestBuy ? { pair: bestBuy.pair, confidence: bestBuy.confidence, recommendation: bestBuy.recommendation, reasoning: bestBuy.reasoning } : null,
+    bestBuy: bestBuy
+      ? { pair: bestBuy.pair, confidence: bestBuy.confidence, recommendation: bestBuy.recommendation, reasoning: bestBuy.reasoning }
+      : bestBuySignal
+        ? {
+            pair: bestBuySignal.pair,
+            confidence: bestBuySignal.confidence,
+            recommendation: bestBuySignal.recommendation,
+            reasoning: bestBuySignal.reasoning,
+            belowMinConfidence: true,
+          }
+        : null,
     usdcFree: initialUsdc,
     insufficientCapital,
     reason,
