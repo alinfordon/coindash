@@ -33,8 +33,8 @@ async function main() {
     // 5-min positions — never adds ?force=1, so the AI Pilot/per-cron
     // toggles in Settings are honored.
     setInterval(() => hit("/api/cron/positions"), 5 * 60 * 1000);
-    // 15-min analysis — same: respects pilotActive + analysisCronActive.
-    setInterval(() => hit("/api/cron/analysis"), 15 * 60 * 1000);
+    // 2h analysis — same: respects pilotActive + analysisCronActive.
+    setInterval(() => hit("/api/cron/analysis"), 2 * 60 * 60 * 1000);
     return { startSchedulers: () => console.log("[nexus worker] fallback HTTP loop started") };
   });
   startSchedulers?.();

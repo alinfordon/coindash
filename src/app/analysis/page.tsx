@@ -1,11 +1,23 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
 import { MiniCandles } from "@/components/analysis/MiniChart";
+import { AnalysisBuyModal } from "@/components/analysis/AnalysisBuyModal";
 import { classOfPnl, fmtNum, fmtPct, fmtUsd } from "@/lib/utils";
-import { Clock, Sparkles, AlertCircle, Loader2 } from "lucide-react";
+import { Clock, Sparkles, AlertCircle, Loader2, ShoppingCart } from "lucide-react";
+import {
+  ANALYSIS_CRON_INTERVAL_MINUTES,
+  computeAnalysisSchedule,
+  formatAnalysisCountdown,
+} from "@/lib/analysisSchedule";
+
+const fetcher = (url: string) =>
+  fetch(url).then((r) => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  });
 
 function formatRoDateTime(value: string | Date): string {
   const d = typeof value === "string" ? new Date(value) : value;
@@ -13,39 +25,49 @@ function formatRoDateTime(value: string | Date): string {
   return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}, ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-function secsUntilNextCronRun(now = Date.now()): number {
-  const nextRun = new Date(now);
-  nextRun.setMinutes(Math.ceil((nextRun.getMinutes() + 1) / 15) * 15, 0, 0);
-  return Math.max(0, Math.floor((nextRun.getTime() - now) / 1000));
-}
-
 function CronCountdown() {
-  const [secs, setSecs] = useState<number | null>(null);
+  const { data } = useSWR<{
+    lastAnalysisAt?: string | null;
+    cronEnabled?: boolean;
+    overdue?: boolean;
+    intervalMinutes?: number;
+  }>("/api/analysis/schedule", fetcher, { refreshInterval: 15_000 });
+
+  const [now, setNow] = useState<number | null>(null);
 
   useEffect(() => {
-    const tick = () => setSecs(secsUntilNextCronRun());
-    tick();
-    const id = window.setInterval(tick, 1000);
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
   }, []);
 
+  const lastRunAt = data?.lastAnalysisAt ?? null;
+  const schedule =
+    now != null ? computeAnalysisSchedule(lastRunAt, now) : { secsUntil: null as number | null, overdue: false };
+
   const label =
-    secs == null
+    schedule.secsUntil == null
       ? "--:--"
-      : `${String(Math.floor(secs / 60)).padStart(2, "0")}:${String(secs % 60).padStart(2, "0")}`;
+      : schedule.overdue
+        ? "00:00"
+        : formatAnalysisCountdown(schedule.secsUntil);
+
+  const cronOff = data && data.cronEnabled === false;
 
   return (
-    <div className="chip border-primary/40 text-primary">
-      <Clock className="h-3 w-3" /> NEXT RUN {label}
+    <div
+      className={`chip ${cronOff ? "border-border text-text-muted" : "border-primary/40 text-primary"}`}
+      title={
+        lastRunAt
+          ? `Ultima analiză: ${formatRoDateTime(lastRunAt)} · interval ${data?.intervalMinutes ?? ANALYSIS_CRON_INTERVAL_MINUTES} min`
+          : `Interval ${data?.intervalMinutes ?? ANALYSIS_CRON_INTERVAL_MINUTES} min`
+      }
+    >
+      <Clock className="h-3 w-3" />
+      {cronOff ? "CRON OFF" : <>NEXT RUN {label}</>}
     </div>
   );
 }
-
-const fetcher = (url: string) =>
-  fetch(url).then((r) => {
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return r.json();
-  });
 
 const recColor: Record<string, string> = {
   STRONG_BUY: "border-success text-success shadow-neon-green",
@@ -82,6 +104,7 @@ type AnalysisRow = {
 };
 
 export default function AnalysisPage() {
+  const { mutate: globalMutate } = useSWRConfig();
   const { data: settings } = useSWR<{ binanceTestnet?: boolean }>("/api/settings", fetcher);
   const { data, error, isLoading, isValidating } = useSWR<{ analyses: AnalysisRow[] }>(
     "/api/analysis/latest",
@@ -89,7 +112,14 @@ export default function AnalysisPage() {
     { refreshInterval: 60_000 }
   );
 
+  useEffect(() => {
+    if (data?.analyses?.[0]?.analyzedAt) {
+      void globalMutate("/api/analysis/schedule");
+    }
+  }, [data?.analyses?.[0]?.analyzedAt, globalMutate]);
+
   const [mounted, setMounted] = useState(false);
+  const [buyTarget, setBuyTarget] = useState<AnalysisRow | null>(null);
   useEffect(() => setMounted(true), []);
 
   const testnet = settings?.binanceTestnet ?? true;
@@ -156,8 +186,8 @@ export default function AnalysisPage() {
           const entryRsi = a.indicators?.rsi15m;
           return (
             <Card key={a._id}>
-              <CardHeader>
-                <div className="flex flex-wrap items-center gap-2">
+              <CardHeader className="flex-col items-stretch gap-2">
+                <div className="flex w-full flex-wrap items-center gap-2">
                   <CardTitle>{a.pair}</CardTitle>
                   <span className={`chip border ${recColor[a.recommendation] || "border-border text-text-muted"}`}>
                     {a.recommendation}
@@ -171,6 +201,13 @@ export default function AnalysisPage() {
                       {a.technicalScore}
                     </span>
                   )}
+                  <button
+                    type="button"
+                    className="chip border-success/50 text-success hover:bg-success/10 transition-colors sm:ml-auto"
+                    onClick={() => setBuyTarget(a)}
+                  >
+                    <ShoppingCart className="h-3 w-3" /> BUY
+                  </button>
                 </div>
                 <div className="text-[10px] mono text-text-muted space-y-0.5 mt-1">
                   {mounted && <div>{formatRoDateTime(a.analyzedAt)}</div>}
@@ -234,6 +271,18 @@ export default function AnalysisPage() {
           );
         })}
       </div>
+
+      <AnalysisBuyModal
+        open={buyTarget != null}
+        onOpenChange={(open) => {
+          if (!open) setBuyTarget(null);
+        }}
+        pair={buyTarget?.pair ?? ""}
+        price={buyTarget?.price}
+        confidence={buyTarget?.confidence}
+        reasoning={buyTarget?.reasoning}
+        indicators={buyTarget?.indicators}
+      />
     </div>
   );
 }

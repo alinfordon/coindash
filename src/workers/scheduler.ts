@@ -1,13 +1,19 @@
 import cron from "node-cron";
 import { runAnalysisCron } from "./analysisCron";
 import { runPositionCron } from "./positionCron";
+import { ANALYSIS_CRON_INTERVAL_MINUTES } from "@/lib/analysisSchedule";
 
 const g = global as any;
 
 export function startSchedulers() {
   if (g.__NEXUS_SCHED__) return g.__NEXUS_SCHED__;
+  const analysisCronExpr =
+    ANALYSIS_CRON_INTERVAL_MINUTES >= 60 && ANALYSIS_CRON_INTERVAL_MINUTES % 60 === 0
+      ? `0 */${ANALYSIS_CRON_INTERVAL_MINUTES / 60} * * *`
+      : `*/${ANALYSIS_CRON_INTERVAL_MINUTES} * * * *`;
+
   const analysis = cron.schedule(
-    "*/15 * * * *",
+    analysisCronExpr,
     async () => {
       try {
         await runAnalysisCron();
