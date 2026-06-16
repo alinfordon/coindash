@@ -3,14 +3,22 @@ import mongoose, { Schema, models, model } from "mongoose";
 const SettingsSchema = new Schema(
   {
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true, unique: true, index: true },
-    aiProvider: { type: String, enum: ["claude", "gemini", "zai", "ollama"], default: "claude" },
+    aiProvider: { type: String, enum: ["claude", "gemini", "deepseek", "ollama"], default: "claude" },
     aiModel: { type: String, default: "claude-sonnet-4-5" },
     /** Empty = use aiModel. Used only by analysis cron (market scan). */
     analysisAiModel: { type: String, default: "" },
     aiApiKey: { type: String, default: "" },
+    /** Per-provider API keys (encrypted). Legacy aiApiKey migrated on read. */
+    aiApiKeys: {
+      claude: { type: String, default: "" },
+      gemini: { type: String, default: "" },
+      deepseek: { type: String, default: "" },
+    },
     ollamaUrl: { type: String, default: "http://localhost:11434" },
-    /** Z.AI OpenAI-compatible base URL (general API or Coding Plan endpoint). */
-    zaiBaseUrl: { type: String, default: "https://api.z.ai/api/paas/v4" },
+    /** DeepSeek OpenAI-compatible API base URL. */
+    deepseekBaseUrl: { type: String, default: "https://api.deepseek.com" },
+    /** @deprecated legacy Z.AI — migrated to deepseek on read */
+    zaiBaseUrl: { type: String, default: "" },
     binanceApiKey: { type: String, default: "" },
     binanceApiSecret: { type: String, default: "" },
     binanceTestnet: { type: Boolean, default: true },

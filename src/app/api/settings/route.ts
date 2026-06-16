@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSettings, updateSettings, redact } from "@/lib/settings";
+import { stripRedactedAiApiKeys } from "@/lib/aiApiKeys";
 import { getApiUserId, apiError } from "@/lib/apiUser";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +23,9 @@ export async function POST(req: Request) {
     for (const k of ["aiApiKey", "binanceApiKey", "binanceApiSecret", "telegramBotToken"]) {
       if (typeof patch[k] === "string" && (patch[k] as string).includes("•")) delete patch[k];
     }
+    const strippedKeys = stripRedactedAiApiKeys(patch.aiApiKeys);
+    if (strippedKeys) patch.aiApiKeys = strippedKeys;
+    else delete patch.aiApiKeys;
     const s = await updateSettings(userId, patch);
     return NextResponse.json(redact(s));
   } catch (e) {

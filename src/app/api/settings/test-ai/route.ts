@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSettings } from "@/lib/settings";
 import { callAI, resolveAiProfile } from "@/lib/ai";
+import { activeCloudProvider, isRedactedSecret, resolveAiApiKeyForProvider, stripRedactedAiApiKeys } from "@/lib/aiApiKeys";
 import { getApiUserId, apiError } from "@/lib/apiUser";
 
 export const dynamic = "force-dynamic";
@@ -10,13 +11,22 @@ export async function POST(req: Request) {
   const userId = await getApiUserId();
   const body = await req.json().catch(() => ({}));
   const current = await getSettings(userId);
+  const provider = body.aiProvider || current.aiProvider;
+  const aiApiKeys = { ...current.aiApiKeys };
+  const incoming = stripRedactedAiApiKeys(body.aiApiKeys);
+  if (incoming) Object.assign(aiApiKeys, incoming);
+  if (typeof body.aiApiKey === "string" && body.aiApiKey && !isRedactedSecret(body.aiApiKey)) {
+    const cloud = activeCloudProvider(provider);
+    if (cloud) aiApiKeys[cloud] = body.aiApiKey.trim();
+  }
   const s = {
     ...current,
-    aiProvider: body.aiProvider || current.aiProvider,
+    aiProvider: provider,
     aiModel: body.aiModel || current.aiModel,
     analysisAiModel: body.analysisAiModel ?? current.analysisAiModel ?? "",
-    zaiBaseUrl: body.zaiBaseUrl ?? current.zaiBaseUrl ?? "https://api.z.ai/api/paas/v4",
-    aiApiKey: body.aiApiKey && !body.aiApiKey.includes("•") ? body.aiApiKey : current.aiApiKey,
+    deepseekBaseUrl: body.deepseekBaseUrl ?? current.deepseekBaseUrl ?? "https://api.deepseek.com",
+    aiApiKeys,
+    aiApiKey: resolveAiApiKeyForProvider({ aiProvider: provider, aiApiKeys, aiApiKey: "" }),
     ollamaUrl: body.ollamaUrl || current.ollamaUrl,
   };
   const role = body.testRole === "analysis" ? "analysis" : "default";

@@ -15,29 +15,30 @@ import {
   normalizeAnalysisIntervalPair,
 } from "@/lib/analysisIntervals";
 import { GEMINI_MODELS, geminiModelMigrationPatch } from "@/lib/aiModels";
+import { type CloudAiProvider, EMPTY_AI_API_KEYS } from "@/lib/aiApiKeys";
 
 const MODELS = {
   claude: ["claude-opus-4-5", "claude-opus-4-8", "claude-sonnet-4-5", "claude-haiku-4-5", "claude-sonnet-4-6"],
   gemini: [...GEMINI_MODELS],
-  zai: ["glm-4.5-air", "glm-4.7", "glm-4.7-flash", "glm-5", "glm-5-turbo", "glm-5.1"],
+  deepseek: ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"],
   ollama: ["llama3.2", "qwen3.5:397b-cloud", "qwen3.5"],
 } as const;
 
 type AiProviderId = keyof typeof MODELS;
 
-const AI_PROVIDERS: AiProviderId[] = ["claude", "gemini", "zai", "ollama"];
+const AI_PROVIDERS: AiProviderId[] = ["claude", "gemini", "deepseek", "ollama"];
 
 function providerSubtitle(p: AiProviderId): string {
   if (p === "claude") return "Anthropic Claude";
   if (p === "gemini") return "Google Gemini";
-  if (p === "zai") return "Z.AI · GLM";
+  if (p === "deepseek") return "DeepSeek API";
   return "Local (Ollama)";
 }
 
 function apiKeyLabel(provider: string): string {
   if (provider === "claude") return "Anthropic API Key";
   if (provider === "gemini") return "Google API Key";
-  if (provider === "zai") return "Z.AI API Key";
+  if (provider === "deepseek") return "DeepSeek API Key";
   return "API Key";
 }
 
@@ -62,11 +63,11 @@ const SETTING_TIPS: Record<string, string> = {
     "Folosește Google Gemini. Potrivit pentru cost redus; poți seta un model mai puternic doar pentru Analysis Cron.",
   aiProviderOllama:
     "Rulează modele local via Ollama. Fără cost API cloud; necesită serverul Ollama pornit.",
-  aiProviderZai:
-    "Z.AI (GLM) — API compatibil OpenAI. Cheie de la z.ai. glm-4.5-air e rapid; glm-5.1 / glm-5-turbo pentru analize complexe.",
-  zaiBaseUrl:
-    "Endpoint Z.AI OpenAI-compatible. General: https://api.z.ai/api/paas/v4 — Coding Plan: https://api.z.ai/api/coding/paas/v4",
-  aiApiKey: "Cheia API a providerului selectat. Stocată criptat; nu se trimite la client după salvare.",
+  aiProviderDeepseek:
+    "DeepSeek — API compatibil OpenAI. Cheie de la platform.deepseek.com. deepseek-chat e rapid; deepseek-reasoner pentru raționament complex.",
+  deepseekBaseUrl:
+    "Endpoint DeepSeek OpenAI-compatible. Implicit: https://api.deepseek.com",
+  aiApiKey: "Cheia API a providerului selectat. Fiecare provider (Claude, Gemini, DeepSeek) își păstrează cheia separat în DB.",
   ollamaUrl: "URL-ul serverului Ollama (ex. http://localhost:11434).",
   aiModelPosition:
     "Modelul AI pentru Position Cron (la ~5 min): evaluează poziții deschise — HOLD sau SELL_NOW. Recomandat model rapid/ieftin.",
@@ -130,7 +131,17 @@ export default function SettingsPage() {
       const next = {
         ...data,
         pairBlacklist: normalizePairBlacklistEntries(data.pairBlacklist),
+        aiApiKeys: {
+          ...EMPTY_AI_API_KEYS,
+          ...(data.aiApiKeys || {}),
+        },
       };
+      if (next.aiProvider === "zai") {
+        next.aiProvider = "deepseek";
+        next.deepseekBaseUrl = next.deepseekBaseUrl || "https://api.deepseek.com";
+        if (String(next.aiModel || "").startsWith("glm")) next.aiModel = "deepseek-chat";
+        if (String(next.analysisAiModel || "").startsWith("glm")) next.analysisAiModel = "deepseek-chat";
+      }
       const geminiPatch = geminiModelMigrationPatch(
         next.aiProvider,
         next.aiModel,
@@ -260,8 +271,8 @@ export default function SettingsPage() {
                   ? SETTING_TIPS.aiProviderClaude
                   : p === "gemini"
                   ? SETTING_TIPS.aiProviderGemini
-                  : p === "zai"
-                  ? SETTING_TIPS.aiProviderZai
+                  : p === "deepseek"
+                  ? SETTING_TIPS.aiProviderDeepseek
                   : SETTING_TIPS.aiProviderOllama
               }
             >
@@ -274,7 +285,7 @@ export default function SettingsPage() {
                     : "border-border bg-surface-2/30 hover:border-primary/30"
                 )}
               >
-                <div className="font-heading text-sm tracking-wider uppercase">{p === "zai" ? "Z.AI" : p}</div>
+                <div className="font-heading text-sm tracking-wider uppercase">{p === "deepseek" ? "DeepSeek" : p}</div>
                 <div className="text-[11px] text-text-muted mt-1 mono">{providerSubtitle(p)}</div>
               </button>
             </SettingTip>
@@ -288,20 +299,27 @@ export default function SettingsPage() {
               <input
                 className="input mt-1"
                 type="password"
-                value={form.aiApiKey || ""}
-                onChange={(e) => set({ aiApiKey: e.target.value })}
-                placeholder={form.aiProvider === "zai" ? "Z.AI API key" : "sk-ant-..."}
+                value={form.aiApiKeys?.[form.aiProvider as CloudAiProvider] ?? ""}
+                onChange={(e) =>
+                  set({
+                    aiApiKeys: {
+                      ...(form.aiApiKeys || EMPTY_AI_API_KEYS),
+                      [form.aiProvider]: e.target.value,
+                    },
+                  })
+                }
+                placeholder={form.aiProvider === "deepseek" ? "DeepSeek API key" : "sk-ant-..."}
               />
             </div>
           )}
-          {form.aiProvider === "zai" && (
+          {form.aiProvider === "deepseek" && (
             <div>
-              <SettingLabel tip={SETTING_TIPS.zaiBaseUrl} label="Z.AI Base URL" />
+              <SettingLabel tip={SETTING_TIPS.deepseekBaseUrl} label="DeepSeek Base URL" />
               <input
                 className="input mt-1 mono text-xs"
-                value={form.zaiBaseUrl ?? "https://api.z.ai/api/paas/v4"}
-                onChange={(e) => set({ zaiBaseUrl: e.target.value })}
-                placeholder="https://api.z.ai/api/paas/v4"
+                value={form.deepseekBaseUrl ?? "https://api.deepseek.com"}
+                onChange={(e) => set({ deepseekBaseUrl: e.target.value })}
+                placeholder="https://api.deepseek.com"
               />
             </div>
           )}

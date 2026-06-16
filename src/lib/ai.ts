@@ -3,9 +3,9 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { RuntimeSettings } from "./settings";
 import { formatGeminiError, resolveGeminiModel } from "./aiModels";
 
-export type AIProvider = "claude" | "gemini" | "zai" | "ollama";
+export type AIProvider = "claude" | "gemini" | "deepseek" | "ollama";
 
-const ZAI_DEFAULT_BASE = "https://api.z.ai/api/paas/v4";
+const DEEPSEEK_DEFAULT_BASE = "https://api.deepseek.com";
 
 export type AIResponse = {
   text: string;
@@ -56,9 +56,9 @@ export async function callAI(
     }
   }
 
-  if (provider === "zai") {
-    if (!settings.aiApiKey) throw new Error("Missing Z.AI API key");
-    const base = (settings.zaiBaseUrl || ZAI_DEFAULT_BASE).replace(/\/$/, "");
+  if (provider === "deepseek") {
+    if (!settings.aiApiKey) throw new Error("Missing DeepSeek API key");
+    const base = (settings.deepseekBaseUrl || DEEPSEEK_DEFAULT_BASE).replace(/\/$/, "");
     const res = await fetch(`${base}/chat/completions`, {
       method: "POST",
       headers: {
@@ -74,13 +74,13 @@ export async function callAI(
     });
     if (!res.ok) {
       const err = await res.text();
-      throw new Error(`Z.AI ${res.status}: ${err.slice(0, 400)}`);
+      throw new Error(`DeepSeek ${res.status}: ${err.slice(0, 400)}`);
     }
     const data = (await res.json()) as {
       choices?: { message?: { content?: string } }[];
     };
     const text = data.choices?.[0]?.message?.content?.trim() ?? "";
-    if (!text) throw new Error("Z.AI returned empty response");
+    if (!text) throw new Error("DeepSeek returned empty response");
     return { text, provider, model, latencyMs: Date.now() - t };
   }
 
@@ -120,7 +120,8 @@ export function assertAiReady(settings: RuntimeSettings, role: "default" | "anal
     return;
   }
   if (!settings.aiApiKey?.trim()) {
-    const label = provider === "claude" ? "Anthropic" : provider === "gemini" ? "Google" : "Z.AI";
+    const label =
+      provider === "claude" ? "Anthropic" : provider === "gemini" ? "Google" : provider === "deepseek" ? "DeepSeek" : "AI";
     throw new Error(`Missing ${label} API key in Settings (AI provider: ${provider})`);
   }
   if (!model?.trim()) throw new Error(`AI model name is empty for provider ${provider}`);

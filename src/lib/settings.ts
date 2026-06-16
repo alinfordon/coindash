@@ -4,16 +4,28 @@ import { decrypt, encrypt } from "./crypto";
 import { fetchPortfolioValueUsdc } from "./binance";
 import { normalizePairBlacklistEntries } from "./pairBlacklistCore";
 import { geminiModelMigrationPatch } from "./aiModels";
+import {
+  type AiApiKeys,
+  type CloudAiProvider,
+  CLOUD_AI_PROVIDERS,
+  activeCloudProvider,
+  isRedactedSecret,
+  resolveAiApiKeyForProvider,
+  stripRedactedAiApiKeys,
+} from "./aiApiKeys";
 import { dedupeSettingsPerUser, migrateLegacyTenantData, toObjectId } from "./tenant";
 import { User } from "@/models/User";
 
 export type RuntimeSettings = {
-  aiProvider: "claude" | "gemini" | "zai" | "ollama";
+  aiProvider: "claude" | "gemini" | "deepseek" | "ollama";
   aiModel: string;
   analysisAiModel: string;
+  /** Key for the active cloud provider (derived). */
   aiApiKey: string;
+  /** Saved keys per cloud provider — persist when switching models/providers. */
+  aiApiKeys: AiApiKeys;
   ollamaUrl: string;
-  zaiBaseUrl: string;
+  deepseekBaseUrl: string;
   binanceApiKey: string;
   binanceApiSecret: string;
   binanceTestnet: boolean;
@@ -53,7 +65,7 @@ const PATCH_KEYS = [
   "analysisAiModel",
   "aiApiKey",
   "ollamaUrl",
-  "zaiBaseUrl",
+  "deepseekBaseUrl",
   "binanceApiKey",
   "binanceApiSecret",
   "binanceTestnet",
@@ -125,28 +137,99 @@ export function sanitizeSettingsPatch(patch: Record<string, unknown>): Partial<R
     }
     out[key] = v;
   }
+  if (patch.aiApiKeys && typeof patch.aiApiKeys === "object") {
+    out.aiApiKeys = patch.aiApiKeys;
+  }
   return out as Partial<RuntimeSettings>;
 }
 
-function defaultSettingsPayload(fromEnv: boolean) {
+function readEncryptedAiApiKeys(doc: Record<string, unknown>): Record<CloudAiProvider, string> {
+  const raw = (doc.aiApiKeys || {}) as Record<string, string>;
   return {
-    aiProvider: (process.env.AI_PROVIDER as RuntimeSettings["aiProvider"]) || "claude",
+    claude: raw.claude || "",
+    gemini: raw.gemini || "",
+    deepseek: raw.deepseek || "",
+  };
+}
+
+function decryptAiApiKeys(encrypted: Record<CloudAiProvider, string>): AiApiKeys {
+  return {
+    claude: decrypt(encrypted.claude || ""),
+    gemini: decrypt(encrypted.gemini || ""),
+    deepseek: decrypt(encrypted.deepseek || ""),
+  };
+}
+
+function migrateLegacyAiApiKeysPatch(
+  doc: Record<string, unknown>,
+  provider: string
+): { aiApiKeys: Record<CloudAiProvider, string> } | null {
+  const encrypted = readEncryptedAiApiKeys(doc);
+  const hasAny = CLOUD_AI_PROVIDERS.some((p) => encrypted[p]);
+  if (hasAny) return null;
+  const legacy = doc.aiApiKey as string | undefined;
+  if (!legacy) return null;
+  const cloud = activeCloudProvider(provider === "zai" ? "deepseek" : provider);
+  if (!cloud) return null;
+  return { aiApiKeys: { ...encrypted, [cloud]: legacy } };
+}
+
+
+function deepseekProviderMigrationPatch(doc: Record<string, unknown>): Partial<RuntimeSettings> | null {
+  const provider = doc.aiProvider as string | undefined;
+  if (provider !== "zai" && provider !== "deepseek") return null;
+  const patch: Partial<RuntimeSettings> = {};
+  if (provider === "zai") patch.aiProvider = "deepseek";
+  const base = doc.deepseekBaseUrl || doc.zaiBaseUrl;
+  if (!base || String(base).includes("z.ai")) {
+    patch.deepseekBaseUrl = "https://api.deepseek.com";
+  } else if (!doc.deepseekBaseUrl && doc.zaiBaseUrl) {
+    patch.deepseekBaseUrl = String(doc.zaiBaseUrl);
+  }
+  const mapModel = (m: unknown) => {
+    const s = String(m || "");
+    if (!s || s.startsWith("glm")) return "deepseek-chat";
+    return s;
+  };
+  if (typeof doc.aiModel === "string" && doc.aiModel.startsWith("glm")) patch.aiModel = mapModel(doc.aiModel);
+  if (typeof doc.analysisAiModel === "string" && doc.analysisAiModel.startsWith("glm")) {
+    patch.analysisAiModel = mapModel(doc.analysisAiModel);
+  }
+  return Object.keys(patch).length ? patch : provider === "zai" ? { aiProvider: "deepseek" } : null;
+}
+
+function defaultSettingsPayload(fromEnv: boolean) {
+  const envProvider = process.env.AI_PROVIDER as RuntimeSettings["aiProvider"] | undefined;
+  const aiProvider =
+    envProvider === "zai" ? "deepseek" : envProvider && ["claude", "gemini", "deepseek", "ollama"].includes(envProvider) ? envProvider : "claude";
+
+  const plainKey = fromEnv
+    ? process.env.ANTHROPIC_API_KEY ||
+      process.env.GOOGLE_API_KEY ||
+      process.env.DEEPSEEK_API_KEY ||
+      process.env.ZAI_API_KEY ||
+      ""
+    : "";
+  const encryptedKey = plainKey ? encrypt(plainKey) : "";
+  const cloud = activeCloudProvider(aiProvider);
+
+  return {
+    aiProvider,
     aiModel:
       process.env.ANTHROPIC_MODEL ||
       process.env.GOOGLE_MODEL ||
-      process.env.ZAI_MODEL ||
+      process.env.DEEPSEEK_MODEL ||
+      (process.env.ZAI_MODEL?.startsWith("glm") ? "deepseek-chat" : process.env.ZAI_MODEL) ||
       process.env.OLLAMA_MODEL ||
       "claude-sonnet-4-5",
-    aiApiKey: fromEnv
-      ? encrypt(
-          process.env.ANTHROPIC_API_KEY ||
-            process.env.GOOGLE_API_KEY ||
-            process.env.ZAI_API_KEY ||
-            ""
-        )
-      : "",
+    aiApiKey: encryptedKey,
+    aiApiKeys: {
+      claude: cloud === "claude" ? encryptedKey : "",
+      gemini: cloud === "gemini" ? encryptedKey : "",
+      deepseek: cloud === "deepseek" ? encryptedKey : "",
+    },
     ollamaUrl: process.env.OLLAMA_URL || "http://localhost:11434",
-    zaiBaseUrl: process.env.ZAI_BASE_URL || "https://api.z.ai/api/paas/v4",
+    deepseekBaseUrl: process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com",
     binanceApiKey: fromEnv ? encrypt(process.env.BINANCE_API_KEY || "") : "",
     binanceApiSecret: fromEnv ? encrypt(process.env.BINANCE_API_SECRET || "") : "",
     binanceTestnet: fromEnv ? (process.env.BINANCE_TESTNET || "true") === "true" : true,
@@ -161,10 +244,34 @@ function docToRuntime(doc: Record<string, unknown>): RuntimeSettings {
   for (const key of PATCH_KEYS) {
     if (key in doc) out[key] = doc[key];
   }
+  out.deepseekBaseUrl = String(
+    doc.deepseekBaseUrl ?? doc.zaiBaseUrl ?? "https://api.deepseek.com"
+  ).replace(/\/$/, "");
+  if (out.aiProvider === "zai") out.aiProvider = "deepseek";
+  if (typeof out.aiModel === "string" && out.aiModel.startsWith("glm")) out.aiModel = "deepseek-chat";
+  if (typeof out.analysisAiModel === "string" && out.analysisAiModel.startsWith("glm")) {
+    out.analysisAiModel = "deepseek-chat";
+  }
   if (doc.cashBalanceUsdc != null) out.cashBalanceUsdc = Number(doc.cashBalanceUsdc) || 0;
   if (doc.cashBalanceUpdatedAt != null) out.cashBalanceUpdatedAt = doc.cashBalanceUpdatedAt as Date;
   if (doc.updatedAt != null) out.updatedAt = doc.updatedAt as Date;
-  for (const f of SECRET_FIELDS) out[f] = decrypt((out[f] as string) || "");
+
+  for (const f of SECRET_FIELDS) {
+    if (f === "aiApiKey") continue;
+    out[f] = decrypt((doc[f] as string) || "");
+  }
+
+  const aiApiKeys = decryptAiApiKeys(readEncryptedAiApiKeys(doc));
+  const legacyKey = decrypt((doc.aiApiKey as string) || "");
+  const cloud = activeCloudProvider(out.aiProvider);
+  if (legacyKey && cloud && !aiApiKeys[cloud]) aiApiKeys[cloud] = legacyKey;
+
+  out.aiApiKeys = aiApiKeys;
+  out.aiApiKey = resolveAiApiKeyForProvider({
+    aiProvider: out.aiProvider,
+    aiApiKeys,
+    aiApiKey: "",
+  });
   out.pairBlacklist = normalizePairBlacklistEntries(out.pairBlacklist);
   return out as RuntimeSettings;
 }
@@ -199,6 +306,23 @@ export async function getSettings(userId: string): Promise<RuntimeSettings> {
     );
   }
 
+  const deepseekPatch = deepseekProviderMigrationPatch(doc);
+  if (deepseekPatch) {
+    Object.assign(out, deepseekPatch);
+    Settings.findOneAndUpdate({ userId: uid }, { $set: deepseekPatch, $unset: { zaiBaseUrl: "" } }).catch((e) =>
+      console.warn("[settings] deepseek migration failed:", e?.message)
+    );
+  }
+
+  const keysPatch = migrateLegacyAiApiKeysPatch(doc, String(out.aiProvider));
+  if (keysPatch) {
+    Settings.findOneAndUpdate({ userId: uid }, { $set: keysPatch }).catch((e) =>
+      console.warn("[settings] aiApiKeys migration failed:", e?.message)
+    );
+    out.aiApiKeys = decryptAiApiKeys(keysPatch.aiApiKeys);
+    out.aiApiKey = resolveAiApiKeyForProvider(out);
+  }
+
   syncToEnv(out);
   return out;
 }
@@ -215,12 +339,39 @@ export async function updateSettings(
     update.pairBlacklist = normalizePairBlacklistEntries(update.pairBlacklist);
   }
   const current = await Settings.findOne({ userId: uid }).lean();
-  const provider = update.aiProvider ?? (current as any)?.aiProvider;
+  const provider = update.aiProvider ?? (current as any)?.aiProvider ?? "claude";
   const aiModel = update.aiModel ?? (current as any)?.aiModel ?? "";
   const analysisAiModel = update.analysisAiModel ?? (current as any)?.analysisAiModel ?? "";
   const geminiPatch = geminiModelMigrationPatch(provider, aiModel, analysisAiModel);
   if (geminiPatch) Object.assign(update, geminiPatch);
+
+  const incomingKeys = stripRedactedAiApiKeys(update.aiApiKeys);
+  const legacyIncoming =
+    typeof update.aiApiKey === "string" && update.aiApiKey && !isRedactedSecret(update.aiApiKey)
+      ? update.aiApiKey.trim()
+      : null;
+  delete update.aiApiKey;
+  delete update.aiApiKeys;
+
+  if (incomingKeys || legacyIncoming) {
+    const mergedEncrypted = readEncryptedAiApiKeys((current || {}) as Record<string, unknown>);
+    if (incomingKeys) {
+      for (const p of CLOUD_AI_PROVIDERS) {
+        const plain = incomingKeys[p];
+        if (plain) mergedEncrypted[p] = encrypt(plain);
+      }
+    }
+    if (legacyIncoming) {
+      const cloud = activeCloudProvider(provider === "zai" ? "deepseek" : provider);
+      if (cloud) mergedEncrypted[cloud] = encrypt(legacyIncoming);
+    }
+    update.aiApiKeys = mergedEncrypted;
+    const activeCloud = activeCloudProvider(provider === "zai" ? "deepseek" : provider);
+    if (activeCloud) update.aiApiKey = mergedEncrypted[activeCloud] || "";
+  }
+
   for (const f of SECRET_FIELDS) {
+    if (f === "aiApiKey") continue;
     if (f in update && typeof update[f] === "string") {
       update[f] = update[f] ? encrypt(update[f]) : "";
     }
@@ -255,10 +406,10 @@ export function syncToEnv(s: RuntimeSettings) {
   } else if (s.aiProvider === "gemini") {
     process.env.GOOGLE_API_KEY = s.aiApiKey || "";
     process.env.GOOGLE_MODEL = s.aiModel || "gemini-2.5-flash-lite";
-  } else if (s.aiProvider === "zai") {
-    process.env.ZAI_API_KEY = s.aiApiKey || "";
-    process.env.ZAI_MODEL = s.aiModel || "glm-4.5-air";
-    process.env.ZAI_BASE_URL = s.zaiBaseUrl || "https://api.z.ai/api/paas/v4";
+  } else if (s.aiProvider === "deepseek") {
+    process.env.DEEPSEEK_API_KEY = s.aiApiKey || "";
+    process.env.DEEPSEEK_MODEL = s.aiModel || "deepseek-chat";
+    process.env.DEEPSEEK_BASE_URL = s.deepseekBaseUrl || "https://api.deepseek.com";
   } else if (s.aiProvider === "ollama") {
     process.env.OLLAMA_URL = s.ollamaUrl || "http://localhost:11434";
     process.env.OLLAMA_MODEL = s.aiModel || "llama3.2";
@@ -318,9 +469,16 @@ export async function syncCashBalanceFromBinance(
 
 export function redact(s: RuntimeSettings) {
   const m = (v?: string) => (v ? `${v.slice(0, 3)}••••${v.slice(-3)}` : "");
+  const aiApiKeys = {
+    claude: m(s.aiApiKeys?.claude),
+    gemini: m(s.aiApiKeys?.gemini),
+    deepseek: m(s.aiApiKeys?.deepseek),
+  };
+  const cloud = activeCloudProvider(s.aiProvider);
   return {
     ...s,
-    aiApiKey: m(s.aiApiKey),
+    aiApiKeys,
+    aiApiKey: cloud ? aiApiKeys[cloud] : "",
     binanceApiKey: m(s.binanceApiKey),
     binanceApiSecret: m(s.binanceApiSecret),
     telegramBotToken: m(s.telegramBotToken),
