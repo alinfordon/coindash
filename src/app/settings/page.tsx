@@ -14,13 +14,13 @@ import {
   normalizeAnalysisInterval,
   normalizeAnalysisIntervalPair,
 } from "@/lib/analysisIntervals";
-import { GEMINI_MODELS, geminiModelMigrationPatch } from "@/lib/aiModels";
+import { GEMINI_MODELS, DEEPSEEK_MODELS, geminiModelMigrationPatch, providerModelMigrationPatch } from "@/lib/aiModels";
 import { type CloudAiProvider, EMPTY_AI_API_KEYS } from "@/lib/aiApiKeys";
 
 const MODELS = {
   claude: ["claude-opus-4-5", "claude-opus-4-8", "claude-sonnet-4-5", "claude-haiku-4-5", "claude-sonnet-4-6"],
   gemini: [...GEMINI_MODELS],
-  deepseek: ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"],
+  deepseek: [...DEEPSEEK_MODELS],
   ollama: ["llama3.2", "qwen3.5:397b-cloud", "qwen3.5"],
 } as const;
 
@@ -156,6 +156,16 @@ export default function SettingsPage() {
           { duration: 8000 }
         );
       }
+      const modelPatch = providerModelMigrationPatch(next.aiProvider, next.aiModel, next.analysisAiModel);
+      if (modelPatch) {
+        Object.assign(next, modelPatch);
+        toast.info(
+          `AI model aligned with ${next.aiProvider}: ${Object.entries(modelPatch)
+            .map(([k, v]) => `${k} → ${v || "(same as position)"}`)
+            .join(", ")}. Save to persist.`,
+          { duration: 8000 }
+        );
+      }
       setForm(next);
     }
   }, [data, form]);
@@ -277,7 +287,13 @@ export default function SettingsPage() {
               }
             >
               <button
-                onClick={() => set({ aiProvider: p, aiModel: MODELS[p][0] || form.aiModel })}
+                onClick={() =>
+                  set({
+                    aiProvider: p,
+                    aiModel: MODELS[p][0],
+                    analysisAiModel: "",
+                  })
+                }
                 className={cn(
                   "rounded-xl border p-4 text-left transition w-full",
                   form.aiProvider === p

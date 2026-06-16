@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { RuntimeSettings } from "./settings";
-import { formatGeminiError, resolveGeminiModel } from "./aiModels";
+import { coerceModelForProvider, formatGeminiError, resolveGeminiModel } from "./aiModels";
 
 export type AIProvider = "claude" | "gemini" | "deepseek" | "ollama";
 
@@ -104,11 +104,14 @@ export function resolveAiProfile(
   settings: RuntimeSettings,
   role: "default" | "analysis" = "default"
 ): { provider: AIProvider; model: string } {
+  const provider = settings.aiProvider;
   if (role === "analysis") {
-    const model = settings.analysisAiModel?.trim();
-    if (model) return { provider: settings.aiProvider, model };
+    const analysis = settings.analysisAiModel?.trim();
+    if (analysis) {
+      return { provider, model: coerceModelForProvider(provider, analysis, "analysis").model };
+    }
   }
-  return { provider: settings.aiProvider, model: settings.aiModel };
+  return { provider, model: coerceModelForProvider(provider, settings.aiModel || "", role).model };
 }
 
 /** Fail fast before scanning dozens of pairs. */

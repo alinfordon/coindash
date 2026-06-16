@@ -3,7 +3,7 @@ import { Settings } from "@/models/Settings";
 import { decrypt, encrypt } from "./crypto";
 import { fetchPortfolioValueUsdc } from "./binance";
 import { normalizePairBlacklistEntries } from "./pairBlacklistCore";
-import { geminiModelMigrationPatch } from "./aiModels";
+import { geminiModelMigrationPatch, providerModelMigrationPatch } from "./aiModels";
 import {
   type AiApiKeys,
   type CloudAiProvider,
@@ -306,6 +306,14 @@ export async function getSettings(userId: string): Promise<RuntimeSettings> {
     );
   }
 
+  const modelPatch = providerModelMigrationPatch(out.aiProvider, out.aiModel, out.analysisAiModel);
+  if (modelPatch) {
+    Object.assign(out, modelPatch);
+    Settings.findOneAndUpdate({ userId: uid }, { $set: modelPatch }).catch((e) =>
+      console.warn("[settings] provider model migration failed:", e?.message)
+    );
+  }
+
   const deepseekPatch = deepseekProviderMigrationPatch(doc);
   if (deepseekPatch) {
     Object.assign(out, deepseekPatch);
@@ -344,6 +352,8 @@ export async function updateSettings(
   const analysisAiModel = update.analysisAiModel ?? (current as any)?.analysisAiModel ?? "";
   const geminiPatch = geminiModelMigrationPatch(provider, aiModel, analysisAiModel);
   if (geminiPatch) Object.assign(update, geminiPatch);
+  const modelPatch = providerModelMigrationPatch(provider, update.aiModel ?? aiModel, update.analysisAiModel ?? analysisAiModel);
+  if (modelPatch) Object.assign(update, modelPatch);
 
   const incomingKeys = stripRedactedAiApiKeys(update.aiApiKeys);
   const legacyIncoming =
