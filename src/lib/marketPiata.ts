@@ -41,6 +41,29 @@ export function toPiataRow(t: Ticker24h): PiataRow {
   };
 }
 
+export function buildSpotUsdcCatalog(
+  tickers: Ticker24h[],
+  spotUsdcSymbols: Set<string>,
+  pairBlacklist?: string[] | null
+): PiataRow[] {
+  return tickers
+    .filter((t) => spotUsdcSymbols.has(t.symbol))
+    .filter((t) => !STABLE_USDC.test(t.symbol))
+    .filter((t) => !isPairBlacklisted(t.symbol, pairBlacklist))
+    .filter((t) => t.lastPrice >= 0.0001)
+    .sort((a, b) => b.quoteVolume - a.quoteVolume)
+    .map(toPiataRow);
+}
+
+/** Match symbol or base asset (e.g. btc, ETHUSDC). */
+export function filterPiataByQuery(rows: PiataRow[], query: string, limit = 50): PiataRow[] {
+  const q = query.trim().toUpperCase();
+  if (!q) return [];
+  return rows
+    .filter((r) => r.symbol.includes(q) || r.base.includes(q))
+    .slice(0, limit);
+}
+
 export function buildPiataSections(
   tickers: Ticker24h[],
   spotUsdcSymbols: Set<string>,

@@ -19,13 +19,17 @@ type Candle = {
 type Props = {
   symbol: string;
   entryPrice: number;
-  stopLoss: number;
-  takeProfit: number;
+  stopLoss?: number | null;
+  takeProfit?: number | null;
   quantity?: number;
   height?: number;
 };
 
 const INTERVALS: Interval[] = ["1m", "5m", "15m", "1h", "4h"];
+
+function isValidPrice(p: unknown): p is number {
+  return typeof p === "number" && Number.isFinite(p) && p > 0;
+}
 
 export function PositionChart({
   symbol,
@@ -160,31 +164,37 @@ export function PositionChart({
         crosshairMarkerVisible: false,
       });
 
-      // Price lines (entry / SL / TP)
-      lineEntryRef.current = candleSeries.createPriceLine({
-        price: entryPrice,
-        color: "#00F5FF",
-        lineWidth: 2,
-        lineStyle: LineStyle.Dashed,
-        axisLabelVisible: true,
-        title: "ENTRY",
-      });
-      lineSLRef.current = candleSeries.createPriceLine({
-        price: stopLoss,
-        color: "#FF3366",
-        lineWidth: 2,
-        lineStyle: LineStyle.Solid,
-        axisLabelVisible: true,
-        title: "SL",
-      });
-      lineTPRef.current = candleSeries.createPriceLine({
-        price: takeProfit,
-        color: "#00FF88",
-        lineWidth: 2,
-        lineStyle: LineStyle.Solid,
-        axisLabelVisible: true,
-        title: "TP",
-      });
+      // Price lines (entry / SL / TP) — SL/TP optional (manual MARKET-only positions)
+      if (isValidPrice(entryPrice)) {
+        lineEntryRef.current = candleSeries.createPriceLine({
+          price: entryPrice,
+          color: "#00F5FF",
+          lineWidth: 2,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: "ENTRY",
+        });
+      }
+      if (isValidPrice(stopLoss)) {
+        lineSLRef.current = candleSeries.createPriceLine({
+          price: stopLoss,
+          color: "#FF3366",
+          lineWidth: 2,
+          lineStyle: LineStyle.Solid,
+          axisLabelVisible: true,
+          title: "SL",
+        });
+      }
+      if (isValidPrice(takeProfit)) {
+        lineTPRef.current = candleSeries.createPriceLine({
+          price: takeProfit,
+          color: "#00FF88",
+          lineWidth: 2,
+          lineStyle: LineStyle.Solid,
+          axisLabelVisible: true,
+          title: "TP",
+        });
+      }
 
       // Load historical candles
       try {
@@ -301,11 +311,45 @@ export function PositionChart({
 
   // Update SL/TP/Entry price lines if they change
   useEffect(() => {
+    const series = candleSeriesRef.current;
+    if (!series) return;
+
+    const syncLine = (
+      ref: { current: any },
+      price: number | null | undefined,
+      options: { color: string; title: string; lineStyle: number }
+    ) => {
+      if (isValidPrice(price)) {
+        if (ref.current) ref.current.applyOptions({ price });
+        else {
+          ref.current = series.createPriceLine({
+            price,
+            color: options.color,
+            lineWidth: 2,
+            lineStyle: options.lineStyle,
+            axisLabelVisible: true,
+            title: options.title,
+          });
+        }
+        return;
+      }
+      if (ref.current) {
+        try {
+          series.removePriceLine(ref.current);
+        } catch {
+          /* ignore */
+        }
+        ref.current = null;
+      }
+    };
+
     try {
-      lineEntryRef.current?.applyOptions({ price: entryPrice });
-      lineSLRef.current?.applyOptions({ price: stopLoss });
-      lineTPRef.current?.applyOptions({ price: takeProfit });
-    } catch {}
+      syncLine(lineEntryRef, entryPrice, { color: "#00F5FF", title: "ENTRY", lineStyle: 2 });
+      syncLine(lineSLRef, stopLoss, { color: "#FF3366", title: "SL", lineStyle: 0 });
+      syncLine(lineTPRef, takeProfit, { color: "#00FF88", title: "TP", lineStyle: 0 });
+    } catch {
+      /* chart not ready */
+    }
   }, [entryPrice, stopLoss, takeProfit]);
 
   function applyIndicators(candles: Candle[]) {
@@ -352,13 +396,15 @@ export function PositionChart({
   }, [livePrice, entryPrice, quantity]);
 
   const distToSL = useMemo(() => {
-    if (!livePrice) return 0;
+    if (!livePrice || !isValidPrice(stopLoss)) return null;
     return ((livePrice - stopLoss) / livePrice) * 100;
   }, [livePrice, stopLoss]);
   const distToTP = useMemo(() => {
-    if (!livePrice) return 0;
+    if (!livePrice || !isValidPrice(takeProfit)) return null;
     return ((takeProfit - livePrice) / livePrice) * 100;
   }, [livePrice, takeProfit]);
+
+  const hasSlTp = isValidPrice(stopLoss) && isValidPrice(takeProfit);
 
   const agoSec = lastUpdate ? Math.floor((Date.now() - lastUpdate) / 1000) : null;
 
@@ -423,8 +469,9 @@ export function PositionChart({
       {/* Legend */}
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] mono text-text-muted">
         <LegendSwatch color="#00F5FF" label="Entry (dashed)" />
-        <LegendSwatch color="#FF3366" label="Stop Loss" />
-        <LegendSwatch color="#00FF88" label="Take Profit" />
+        {isValidPrice(stopLoss) && <LegendSwatch color="#FF3366" label="Stop Loss" />}
+        {isValidPrice(takeProfit) && <LegendSwatch color="#00FF88" label="Take Profit" />}
+        {!hasSlTp && <span className="text-text-muted/80 italic">Fără SL/TP pe poziție</span>}
         <LegendSwatch color="#FFC857" label="EMA20" />
         <LegendSwatch color="#7B2FFF" label="EMA50" />
         <LegendSwatch color="#5A7A9A" label="Bollinger 20/2 (dotted)" />
@@ -435,13 +482,21 @@ export function PositionChart({
         <MiniStat label="Entry" value={fmtNum(entryPrice, 6)} />
         <MiniStat
           label="Stop Loss"
-          value={fmtNum(stopLoss, 6)}
-          sub={<span className="text-danger">{fmtPct(-Math.abs(distToSL))}</span>}
+          value={isValidPrice(stopLoss) ? fmtNum(stopLoss, 6) : "—"}
+          sub={
+            distToSL != null ? (
+              <span className="text-danger">{fmtPct(-Math.abs(distToSL))}</span>
+            ) : undefined
+          }
         />
         <MiniStat
           label="Take Profit"
-          value={fmtNum(takeProfit, 6)}
-          sub={<span className="text-success">+{fmtPct(distToTP).replace("+", "")}</span>}
+          value={isValidPrice(takeProfit) ? fmtNum(takeProfit, 6) : "—"}
+          sub={
+            distToTP != null ? (
+              <span className="text-success">+{fmtPct(distToTP).replace("+", "")}</span>
+            ) : undefined
+          }
         />
         <MiniStat
           label={quantity ? "Unrealized P&L" : "Live"}

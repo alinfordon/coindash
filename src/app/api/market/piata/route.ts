@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSettings } from "@/lib/settings";
 import { fetchAll24h, getSpotUsdcTradableSymbols } from "@/lib/binance";
-import { buildPiataSections } from "@/lib/marketPiata";
+import { buildPiataSections, buildSpotUsdcCatalog } from "@/lib/marketPiata";
 import { getApiUserId, apiError } from "@/lib/apiUser";
 
 export const dynamic = "force-dynamic";
@@ -35,6 +35,7 @@ export async function GET() {
       settings.binanceTestnet,
       settings.pairBlacklist
     );
+    const catalog = buildSpotUsdcCatalog(tickers, spotUsdcSymbols, settings.pairBlacklist);
     const btc = spotUsdcSymbols.has("BTCUSDC") ? tickers.find((t) => t.symbol === "BTCUSDC") : undefined;
 
     return NextResponse.json({
@@ -47,6 +48,8 @@ export async function GET() {
         ? { price: btc.lastPrice, change24h: btc.priceChangePercent, quoteVolume24h: btc.quoteVolume }
         : null,
       ...sections,
+      catalog,
+      catalogCount: catalog.length,
     });
   } catch (e) {
     return apiError(e);

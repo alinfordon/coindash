@@ -4,6 +4,7 @@ import { useState } from "react";
 import useSWR from "swr";
 import { Card } from "@/components/ui/Card";
 import { MarketPairTable } from "@/components/piata/MarketPairTable";
+import { PiataPairSearch } from "@/components/piata/PiataPairSearch";
 import { ManualTradeModal } from "@/components/analysis/AnalysisBuyModal";
 import { classOfPnl, fmtPct, fmtUsd } from "@/lib/utils";
 import type { PiataRow } from "@/lib/marketPiata";
@@ -32,6 +33,8 @@ type PiataData = {
   hot: PiataRow[];
   rising24h: PiataRow[];
   falling24h: PiataRow[];
+  catalog?: PiataRow[];
+  catalogCount?: number;
 };
 
 export default function PiataPage() {
@@ -39,6 +42,7 @@ export default function PiataPage() {
     refreshInterval: 60_000,
   });
   const [buyTarget, setBuyTarget] = useState<PiataRow | null>(null);
+  const [searchActive, setSearchActive] = useState(false);
 
   const updatedLabel = data?.updatedAt
     ? new Date(data.updatedAt).toLocaleString("ro-RO", { hour12: false })
@@ -94,6 +98,13 @@ export default function PiataPage() {
         </Card>
       )}
 
+      <PiataPairSearch
+        catalog={data?.catalog ?? []}
+        onBuy={setBuyTarget}
+        onSearchActiveChange={setSearchActive}
+      />
+
+      {!searchActive && (
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <MarketPairTable
           title="În tendință"
@@ -128,6 +139,7 @@ export default function PiataPage() {
           onBuy={setBuyTarget}
         />
       </div>
+      )}
 
       <ManualTradeModal
         open={buyTarget != null}
