@@ -70,9 +70,9 @@ const SETTING_TIPS: Record<string, string> = {
   aiApiKey: "Cheia API a providerului selectat. Fiecare provider (Claude, Gemini, DeepSeek) își păstrează cheia separat în DB.",
   ollamaUrl: "URL-ul serverului Ollama (ex. http://localhost:11434).",
   aiModelPosition:
-    "Modelul AI pentru Position Cron (la ~5 min): evaluează poziții deschise — HOLD sau SELL_NOW. Recomandat model rapid/ieftin.",
+    "Modelul AI pentru Position Cron (la ~45 min): evaluează poziții deschise — HOLD sau SELL_NOW. Recomandat model rapid/ieftin.",
   aiModelAnalysis:
-    "Modelul AI pentru Analysis Cron (la ~15 min): scan piață + semnale BUY. Gol = același ca Position. Recomandat model mai capabil.",
+    "Modelul AI pentru Analysis Cron (la ~120 min): scan piață + semnale BUY. Gol = același ca Position. Recomandat model mai capabil.",
   analysisTrendInterval:
     "Timeframe principal pentru indicatori (EMA, MACD, Bollinger) trimiși la AI. Definește trendul — ex. 1h swing, 4h position.",
   analysisEntryInterval:
@@ -80,9 +80,9 @@ const SETTING_TIPS: Record<string, string> = {
   pilotActive:
     "Comutator master: OFF oprește toate cron-urile automate (analiză + verificare poziții). Nu închide poziții existente.",
   positionCheckCronActive:
-    "La fiecare ~5 minute verifică TP/SL, reconcile cu Binance și poate închide poziții via AI dacă confidence ≥ 80%.",
+    "La fiecare ~45 minute verifică TP/SL, reconcile cu Binance și poate închide poziții via AI dacă confidence ≥ 80%.",
   analysisCronActive:
-    "La fiecare ~15 minute scanează top perechi USDC, calculează TA, întreabă AI-ul și poate deschide poziții noi.",
+    "La fiecare ~120 minute scanează top perechi USDC, calculează TA, întreabă AI-ul și poate deschide poziții noi.",
   dryRun:
     "Simulare: calculează semnale și salvează în DB fără ordine reale pe Binance. Util pentru testare.",
   maxOpenPairs:
@@ -535,13 +535,13 @@ export default function SettingsPage() {
 
         <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-3 mb-4">
           <ToggleRow
-            label="5-min Position Check Cron"
+            label="45-min Position Check Cron"
             tip={SETTING_TIPS.positionCheckCronActive}
             active={!!form.positionCheckCronActive}
             onChange={(v) => set({ positionCheckCronActive: v })}
           />
           <ToggleRow
-            label="15-min Analysis Cron"
+            label="120-min Analysis Cron"
             tip={SETTING_TIPS.analysisCronActive}
             active={!!form.analysisCronActive}
             onChange={(v) => set({ analysisCronActive: v })}

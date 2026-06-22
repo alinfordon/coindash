@@ -25,7 +25,7 @@ const baseNav = [
   { href: "/positions", label: "Positions", short: "Pos", icon: Activity },
   { href: "/history", label: "History", short: "Log", icon: History },
   { href: "/analysis", label: "Analysis", short: "AI", icon: LineChart },
-  { href: "/piata", label: "Piață", short: "Mkt", icon: TrendingUp },
+  { href: "/piata", label: "Market", short: "Mkt", icon: TrendingUp },
   { href: "/settings", label: "Settings", short: "Cfg", icon: Settings },
 ];
 
