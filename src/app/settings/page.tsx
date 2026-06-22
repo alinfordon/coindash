@@ -240,8 +240,8 @@ export default function SettingsPage() {
 
   return (
     <TooltipProvider delayDuration={200}>
-    <div className="space-y-6 max-w-5xl">
-      <div className="flex items-end justify-between">
+    <div className="space-y-6 max-w-9xl">
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
         <div>
           <h1 className="text-3xl font-heading font-bold">Settings</h1>
           <p className="text-sm text-text-muted mt-1 mono">SYSTEM CONFIGURATION</p>
@@ -258,6 +258,8 @@ export default function SettingsPage() {
         </div>
       </div>
 
+      {/* Row 1 — AI + integrations */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">
       {/* AI Configuration */}
       <Card>
         <CardHeader>
@@ -272,7 +274,7 @@ export default function SettingsPage() {
           </div>
         </CardHeader>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
+        <div className="grid grid-cols-2 gap-2 mb-4">
           {AI_PROVIDERS.map((p) => (
             <SettingTip
               key={p}
@@ -308,7 +310,7 @@ export default function SettingsPage() {
           ))}
         </div>
 
-        <div className="grid md:grid-cols-2 gap-4">
+        <div className="grid sm:grid-cols-2 gap-4">
           {form.aiProvider !== "ollama" && (
             <div>
               <SettingLabel tip={SETTING_TIPS.aiApiKey} label={apiKeyLabel(form.aiProvider)} />
@@ -445,7 +447,74 @@ export default function SettingsPage() {
         </p>
       </Card>
 
-      {/* Trading Controls */}
+      <div className="space-y-6">
+      {/* Binance API */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Binance API</CardTitle>
+          <button className="btn" onClick={testBinance}>
+            <PlugZap className="h-4 w-4" /> Test Connection
+          </button>
+        </CardHeader>
+
+        {confirmBinance && (
+          <div className="rounded-lg border border-warning/50 bg-warning/10 p-3 mb-4 text-xs text-warning">
+            <strong>Confirm Save:</strong> You are about to persist new Binance credentials. Click <em>Confirm Save</em> again to proceed.
+          </div>
+        )}
+
+        <div className="grid sm:grid-cols-2 gap-4">
+          <Field
+            label="API Key"
+            tip={SETTING_TIPS.binanceApiKey}
+            type="password"
+            value={form.binanceApiKey || ""}
+            onChange={(v) => set({ binanceApiKey: v })}
+          />
+          <Field
+            label="API Secret"
+            tip={SETTING_TIPS.binanceApiSecret}
+            type="password"
+            value={form.binanceApiSecret || ""}
+            onChange={(v) => set({ binanceApiSecret: v })}
+          />
+        </div>
+
+        <div className="mt-4">
+          <ToggleRow
+            label={form.binanceTestnet ? "Testnet (safe)" : "Live Trading (real money)"}
+            tip={SETTING_TIPS.binanceTestnet}
+            active={!!form.binanceTestnet}
+            onChange={(v) => set({ binanceTestnet: v })}
+          />
+        </div>
+      </Card>
+
+      {/* Notifications */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Notifications · Telegram</CardTitle>
+        </CardHeader>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <Field
+            label="Bot Token"
+            tip={SETTING_TIPS.telegramBotToken}
+            type="password"
+            value={form.telegramBotToken || ""}
+            onChange={(v) => set({ telegramBotToken: v })}
+          />
+          <Field
+            label="Chat ID"
+            tip={SETTING_TIPS.telegramChatId}
+            value={form.telegramChatId || ""}
+            onChange={(v) => set({ telegramChatId: v })}
+          />
+        </div>
+      </Card>
+      </div>
+      </div>
+
+      {/* Row 2 — Trading */}
       <Card>
         <CardHeader>
           <CardTitle>Trading Controls</CardTitle>
@@ -464,7 +533,7 @@ export default function SettingsPage() {
           <BigToggle active={!!form.pilotActive} onChange={(v) => set({ pilotActive: v })} />
         </div>
 
-        <div className="grid md:grid-cols-2 gap-3 mb-4">
+        <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-3 mb-4">
           <ToggleRow
             label="5-min Position Check Cron"
             tip={SETTING_TIPS.positionCheckCronActive}
@@ -483,9 +552,15 @@ export default function SettingsPage() {
             active={!!form.dryRun}
             onChange={(v) => set({ dryRun: v })}
           />
+          <ToggleRow
+            label="Entry gate (balanced TA filters)"
+            tip={SETTING_TIPS.entryGateEnabled}
+            active={form.entryGateEnabled ?? true}
+            onChange={(v) => set({ entryGateEnabled: v })}
+          />
         </div>
 
-        <div className="grid md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 mb-4">
           <Field
             label="Max Open Pairs"
             tip={SETTING_TIPS.maxOpenPairs}
@@ -528,6 +603,9 @@ export default function SettingsPage() {
             value={form.takeProfitPercent}
             onChange={(v) => set({ takeProfitPercent: +v })}
           />
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           <div>
             <SettingLabel
               tip={SETTING_TIPS.minConfidence}
@@ -573,6 +651,23 @@ export default function SettingsPage() {
             value={form.maxPump24hPct ?? 15}
             onChange={(v) => set({ maxPump24hPct: +v })}
           />
+          <div>
+            <SettingLabel tip={SETTING_TIPS.displayTimezone} label="Display Timezone" />
+            <select
+              className="input mt-1"
+              value={form.displayTimezone || "Europe/Bucharest"}
+              onChange={(e) => set({ displayTimezone: e.target.value })}
+            >
+              {TIMEZONES.map((tz) => (
+                <option key={tz} value={tz}>
+                  {tz}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
           <Field
             label="SL cooldown (minutes)"
             tip={SETTING_TIPS.slCooldownMinutes}
@@ -591,33 +686,14 @@ export default function SettingsPage() {
             value={form.tpReopenCooldownMinutes ?? 30}
             onChange={(v) => set({ tpReopenCooldownMinutes: +v })}
           />
-          <ToggleRow
-            label="Entry gate (balanced TA filters)"
-            tip={SETTING_TIPS.entryGateEnabled}
-            active={form.entryGateEnabled ?? true}
-            onChange={(v) => set({ entryGateEnabled: v })}
-          />
-          <p className="md:col-span-3 text-[11px] text-text-muted mono leading-relaxed -mt-1">
-            Balanced: BUY/STRONG_BUY + score ≥ {form.minTechnicalScore ?? 40} (STRONG_BUY ≥{" "}
-            {Math.max(30, (form.minTechnicalScore ?? 40) - 10)}), price ≥ EMA20 ({form.analysisTrendInterval ?? "1h"}),
-            MACD trend ≥ 0, RSI entry {form.analysisEntryInterval ?? "15m"} 35–70, no falling entry trend, skip 24h pump &gt;{" "}
-            {form.maxPump24hPct ?? 15}%.
-          </p>
-          <div>
-            <SettingLabel tip={SETTING_TIPS.displayTimezone} label="Display Timezone" />
-            <select
-              className="input mt-1"
-              value={form.displayTimezone || "Europe/Bucharest"}
-              onChange={(e) => set({ displayTimezone: e.target.value })}
-            >
-              {TIMEZONES.map((tz) => (
-                <option key={tz} value={tz}>
-                  {tz}
-                </option>
-              ))}
-            </select>
-          </div>
         </div>
+
+        <p className="text-[11px] text-text-muted mono leading-relaxed mt-4">
+          Balanced: BUY/STRONG_BUY + score ≥ {form.minTechnicalScore ?? 40} (STRONG_BUY ≥{" "}
+          {Math.max(30, (form.minTechnicalScore ?? 40) - 10)}), price ≥ EMA20 ({form.analysisTrendInterval ?? "1h"}),
+          MACD trend ≥ 0, RSI entry {form.analysisEntryInterval ?? "15m"} 35–70, no falling entry trend, skip 24h pump &gt;{" "}
+          {form.maxPump24hPct ?? 15}%.
+        </p>
 
         <div className="rounded-xl border border-border/60 bg-surface-2/20 p-4 mt-6">
           <div className="flex items-center gap-2 mb-1">
@@ -671,70 +747,6 @@ export default function SettingsPage() {
               <Plus className="h-4 w-4" /> Add
             </button>
           </div>
-        </div>
-      </Card>
-
-      {/* Binance API */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Binance API</CardTitle>
-          <button className="btn" onClick={testBinance}>
-            <PlugZap className="h-4 w-4" /> Test Connection
-          </button>
-        </CardHeader>
-
-        {confirmBinance && (
-          <div className="rounded-lg border border-warning/50 bg-warning/10 p-3 mb-4 text-xs text-warning">
-            <strong>Confirm Save:</strong> You are about to persist new Binance credentials. Click <em>Confirm Save</em> again to proceed.
-          </div>
-        )}
-
-        <div className="grid md:grid-cols-2 gap-4">
-          <Field
-            label="API Key"
-            tip={SETTING_TIPS.binanceApiKey}
-            type="password"
-            value={form.binanceApiKey || ""}
-            onChange={(v) => set({ binanceApiKey: v })}
-          />
-          <Field
-            label="API Secret"
-            tip={SETTING_TIPS.binanceApiSecret}
-            type="password"
-            value={form.binanceApiSecret || ""}
-            onChange={(v) => set({ binanceApiSecret: v })}
-          />
-        </div>
-
-        <div className="mt-4">
-          <ToggleRow
-            label={form.binanceTestnet ? "Testnet (safe)" : "Live Trading (real money)"}
-            tip={SETTING_TIPS.binanceTestnet}
-            active={!!form.binanceTestnet}
-            onChange={(v) => set({ binanceTestnet: v })}
-          />
-        </div>
-      </Card>
-
-      {/* Notifications */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Notifications · Telegram</CardTitle>
-        </CardHeader>
-        <div className="grid md:grid-cols-2 gap-4">
-          <Field
-            label="Bot Token"
-            tip={SETTING_TIPS.telegramBotToken}
-            type="password"
-            value={form.telegramBotToken || ""}
-            onChange={(v) => set({ telegramBotToken: v })}
-          />
-          <Field
-            label="Chat ID"
-            tip={SETTING_TIPS.telegramChatId}
-            value={form.telegramChatId || ""}
-            onChange={(v) => set({ telegramChatId: v })}
-          />
         </div>
       </Card>
     </div>

@@ -54,6 +54,7 @@ export async function GET(req: Request) {
       minNotional,
       alreadyOpen: !!openForPair,
       dryRun: settings.dryRun,
+      testnet: settings.binanceTestnet,
       maxUsdcPerOrder: settings.maxUsdcPerOrder,
       stopLossPercent: settings.stopLossPercent,
       takeProfitPercent: settings.takeProfitPercent,
@@ -82,8 +83,9 @@ export async function POST(req: Request) {
       .toUpperCase()
       .trim();
     const usdcValue = Number(body.usdcValue);
-    const stopLossPct = Number(body.stopLossPercent);
-    const takeProfitPct = Number(body.takeProfitPercent);
+    const withSlTp = body.withSlTp !== false;
+    const stopLossPct = body.stopLossPercent != null ? Number(body.stopLossPercent) : undefined;
+    const takeProfitPct = body.takeProfitPercent != null ? Number(body.takeProfitPercent) : undefined;
     const entryHint = body.entryHint != null ? Number(body.entryHint) : undefined;
     const aiConfidence = body.aiConfidence != null ? Number(body.aiConfidence) : 0;
     const aiReasoning = String(body.aiReasoning || "Manual buy from Analysis page");
@@ -94,11 +96,13 @@ export async function POST(req: Request) {
     if (!Number.isFinite(usdcValue) || usdcValue < 10) {
       return NextResponse.json({ ok: false, error: "USDC amount must be at least 10" }, { status: 400 });
     }
-    if (!Number.isFinite(stopLossPct) || stopLossPct <= 0 || stopLossPct > 50) {
-      return NextResponse.json({ ok: false, error: "Stop loss must be between 0 and 50%" }, { status: 400 });
-    }
-    if (!Number.isFinite(takeProfitPct) || takeProfitPct <= 0 || takeProfitPct > 100) {
-      return NextResponse.json({ ok: false, error: "Take profit must be between 0 and 100%" }, { status: 400 });
+    if (withSlTp) {
+      if (!Number.isFinite(stopLossPct) || stopLossPct! <= 0 || stopLossPct! > 50) {
+        return NextResponse.json({ ok: false, error: "Stop loss must be between 0 and 50%" }, { status: 400 });
+      }
+      if (!Number.isFinite(takeProfitPct) || takeProfitPct! <= 0 || takeProfitPct! > 100) {
+        return NextResponse.json({ ok: false, error: "Take profit must be between 0 and 100%" }, { status: 400 });
+      }
     }
 
     const existing = await Trade.findOne(userScope(userId, { pair, status: "OPEN" }));
@@ -136,7 +140,9 @@ export async function POST(req: Request) {
       /* optional if symbol lookup fails */
     }
 
-    const tpEffective = effectiveTakeProfitPct(stopLossPct, takeProfitPct, settings.riskRewardRatio);
+    const tpEffective = withSlTp
+      ? effectiveTakeProfitPct(stopLossPct!, takeProfitPct!, settings.riskRewardRatio)
+      : undefined;
     const aiProfile = resolveAiProfile(settings, "analysis");
 
     const trade = await openPosition({
@@ -144,8 +150,9 @@ export async function POST(req: Request) {
       pair,
       usdcValue,
       entryHint: Number.isFinite(entryHint) ? entryHint : undefined,
-      stopLossPct,
-      takeProfitPct: tpEffective,
+      withSlTp,
+      stopLossPct: withSlTp ? stopLossPct : undefined,
+      takeProfitPct: withSlTp ? tpEffective : undefined,
       aiProvider: aiProfile.provider,
       aiModel: aiProfile.model,
       aiConfidence,
@@ -166,7 +173,7 @@ export async function POST(req: Request) {
         usdcValue: trade.usdcValue,
         dryRun: trade.dryRun,
       },
-      takeProfitPercentUsed: tpEffective,
+      takeProfitPercentUsed: tpEffective ?? null,
     });
   } catch (e: any) {
     const msg = e?.message || "Order failed";

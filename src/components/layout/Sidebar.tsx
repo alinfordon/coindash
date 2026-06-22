@@ -15,6 +15,7 @@ import {
   User,
   BarChart3,
   Shield,
+  TrendingUp,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +25,7 @@ const baseNav = [
   { href: "/positions", label: "Positions", short: "Pos", icon: Activity },
   { href: "/history", label: "History", short: "Log", icon: History },
   { href: "/analysis", label: "Analysis", short: "AI", icon: LineChart },
+  { href: "/piata", label: "Piață", short: "Mkt", icon: TrendingUp },
   { href: "/settings", label: "Settings", short: "Cfg", icon: Settings },
 ];
 
@@ -139,13 +141,18 @@ function SessionCard() {
 export function MobileNav() {
   const pathname = usePathname();
   const nav = useNavItems();
-  const cols = nav.length <= 6 ? 6 : 7;
+  const cols = nav.length <= 5 ? 5 : nav.length <= 6 ? 6 : 7;
   return (
     <nav
       className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-border/80 bg-surface/80 backdrop-blur-xl"
       style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
     >
-      <div className={cn("grid", cols === 7 ? "grid-cols-7" : "grid-cols-6")}>
+      <div
+        className={cn(
+          "grid",
+          cols === 7 ? "grid-cols-7" : cols === 6 ? "grid-cols-6" : cols === 5 ? "grid-cols-5" : "grid-cols-4"
+        )}
+      >
         {nav.map((n) => {
           const active = isNavActive(pathname, n.href);
           const Icon = n.icon;

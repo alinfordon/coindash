@@ -40,7 +40,12 @@ export type SymbolInfo = {
   minNotional: number;
 };
 
-type Cache = { map: Map<string, SymbolInfo>; ts: number; testnet: boolean } | null;
+type Cache = {
+  map: Map<string, SymbolInfo>;
+  spotUsdcSymbols: Set<string>;
+  ts: number;
+  testnet: boolean;
+} | null;
 const g = global as any;
 function getCache(): Cache {
   return (g.__NEXUS_SYMBOLS__ ??= null);
@@ -49,14 +54,37 @@ function setCache(c: Cache) {
   g.__NEXUS_SYMBOLS__ = c;
 }
 
+function isSpotTradableSymbol(s: {
+  isSpotTradingAllowed?: boolean;
+  permissions?: string[];
+  permissionSets?: string[][];
+}): boolean {
+  if (s.isSpotTradingAllowed === false) return false;
+  if (Array.isArray(s.permissions) && s.permissions.length > 0) {
+    return s.permissions.includes("SPOT");
+  }
+  if (Array.isArray(s.permissionSets) && s.permissionSets.length > 0) {
+    return s.permissionSets.some((set) => Array.isArray(set) && set.includes("SPOT"));
+  }
+  return s.isSpotTradingAllowed !== false;
+}
+
 /** Loads the full /exchangeInfo once per hour and indexes symbol filters. */
-async function loadExchangeInfo(testnet: boolean): Promise<Map<string, SymbolInfo>> {
+async function loadExchangeInfo(
+  testnet: boolean
+): Promise<{ map: Map<string, SymbolInfo>; spotUsdcSymbols: Set<string> }> {
   const cache = getCache();
-  if (cache && cache.testnet === testnet && Date.now() - cache.ts < 60 * 60_000) {
-    return cache.map;
+  if (
+    cache &&
+    cache.testnet === testnet &&
+    cache.spotUsdcSymbols instanceof Set &&
+    Date.now() - cache.ts < 60 * 60_000
+  ) {
+    return { map: cache.map, spotUsdcSymbols: cache.spotUsdcSymbols };
   }
   const data = await publicGet<any>("/api/v3/exchangeInfo", {}, testnet);
   const map = new Map<string, SymbolInfo>();
+  const spotUsdcSymbols = new Set<string>();
   for (const s of data.symbols || []) {
     if (s.status !== "TRADING") continue;
     const f = (t: string) => (s.filters || []).find((x: any) => x.filterType === t) || {};
@@ -71,14 +99,23 @@ async function loadExchangeInfo(testnet: boolean): Promise<Map<string, SymbolInf
       minQty: +(lot.minQty || "0"),
       minNotional: +notional,
     });
+    if (s.quoteAsset === "USDC" && isSpotTradableSymbol(s)) {
+      spotUsdcSymbols.add(s.symbol);
+    }
   }
-  setCache({ map, ts: Date.now(), testnet });
-  return map;
+  setCache({ map, spotUsdcSymbols, ts: Date.now(), testnet });
+  return { map, spotUsdcSymbols };
+}
+
+/** Symbols listed on Binance SPOT with USDC quote and status TRADING. */
+export async function getSpotUsdcTradableSymbols(testnet = true): Promise<Set<string>> {
+  const { spotUsdcSymbols } = await loadExchangeInfo(testnet);
+  return spotUsdcSymbols;
 }
 
 export async function getSymbolInfo(symbol: string, testnet = true): Promise<SymbolInfo> {
-  const m = await loadExchangeInfo(testnet);
-  const s = m.get(symbol);
+  const { map } = await loadExchangeInfo(testnet);
+  const s = map.get(symbol);
   if (!s) throw new Error(`Unknown Binance symbol: ${symbol}`);
   return s;
 }

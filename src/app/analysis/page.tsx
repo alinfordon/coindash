@@ -279,6 +279,7 @@ export default function AnalysisPage() {
         }}
         pair={buyTarget?.pair ?? ""}
         price={buyTarget?.price}
+        source="Analysis"
         confidence={buyTarget?.confidence}
         reasoning={buyTarget?.reasoning}
         indicators={buyTarget?.indicators}

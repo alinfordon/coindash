@@ -21,8 +21,10 @@ export type OpenParams = {
   pair: string;
   usdcValue: number;
   entryHint?: number;
-  stopLossPct: number;
-  takeProfitPct: number;
+  stopLossPct?: number;
+  takeProfitPct?: number;
+  /** When false, only MARKET buy — no OCO / SL/TP on exchange or in trade record. */
+  withSlTp?: boolean;
   aiProvider: string;
   aiModel: string;
   aiConfidence: number;
@@ -59,8 +61,9 @@ export async function openPosition(p: OpenParams) {
     );
   }
 
-  const stopLoss = price * (1 - p.stopLossPct / 100);
-  const takeProfit = price * (1 + p.takeProfitPct / 100);
+  const withSlTp = p.withSlTp !== false;
+  const slPct = p.stopLossPct ?? p.settings.stopLossPercent;
+  const tpPct = p.takeProfitPct ?? p.settings.takeProfitPercent;
 
   let buyOrder: any = null;
   let oco: any = null;
@@ -101,13 +104,15 @@ export async function openPosition(p: OpenParams) {
     netQty = finalQty;
 
     try {
-      oco = await placeOco(
-        p.pair,
-        finalQty,
-        entryPriceActual * (1 + p.takeProfitPct / 100),
-        entryPriceActual * (1 - p.stopLossPct / 100),
-        testnet
-      );
+      if (withSlTp) {
+        oco = await placeOco(
+          p.pair,
+          finalQty,
+          entryPriceActual * (1 + tpPct / 100),
+          entryPriceActual * (1 - slPct / 100),
+          testnet
+        );
+      }
     } catch (e: any) {
       ocoError = e.message?.slice(0, 300) || String(e);
       console.error(`[OCO FAIL] ${p.pair}: ${ocoError}`);
@@ -117,13 +122,18 @@ export async function openPosition(p: OpenParams) {
         pair: p.pair,
         decision: "OCO_FAIL",
         reasoning: ocoError,
-        meta: { entry: entryPriceActual, qty: finalQty, sl: entryPriceActual * (1 - p.stopLossPct / 100), tp: entryPriceActual * (1 + p.takeProfitPct / 100) },
+        meta: {
+          entry: entryPriceActual,
+          qty: finalQty,
+          sl: entryPriceActual * (1 - slPct / 100),
+          tp: entryPriceActual * (1 + tpPct / 100),
+        },
       });
     }
   }
 
-  const finalStopLoss = entryPriceActual * (1 - p.stopLossPct / 100);
-  const finalTakeProfit = entryPriceActual * (1 + p.takeProfitPct / 100);
+  const finalStopLoss = withSlTp ? entryPriceActual * (1 - slPct / 100) : undefined;
+  const finalTakeProfit = withSlTp ? entryPriceActual * (1 + tpPct / 100) : undefined;
 
   const trade = await Trade.create({
     userId: toObjectId(p.userId),
@@ -142,7 +152,11 @@ export async function openPosition(p: OpenParams) {
     aiModel: p.aiModel,
     aiConfidence: p.aiConfidence,
     aiReasoning: p.aiReasoning,
-    technicalIndicators: { ...(p.indicators || {}), ocoError: ocoError || undefined },
+    technicalIndicators: {
+      ...(p.indicators || {}),
+      withSlTp,
+      ocoError: ocoError || undefined,
+    },
     dryRun: p.settings.dryRun,
   });
 
@@ -158,8 +172,12 @@ export async function openPosition(p: OpenParams) {
     aiProvider: p.aiProvider,
   });
 
+  const slTpLine = withSlTp
+    ? `\nSL: $${finalStopLoss!.toFixed(6)} | TP: $${finalTakeProfit!.toFixed(6)}`
+    : "\nFără SL/TP (doar MARKET)";
+
   await notifyTelegram(
-    `🟢 <b>OPEN ${p.pair}</b>\nEntry: $${entryPriceActual.toFixed(6)}\nSize: $${p.usdcValue}\nSL: $${finalStopLoss.toFixed(6)} | TP: $${finalTakeProfit.toFixed(6)}\nAI: ${p.aiProvider} (${p.aiConfidence}%)${ocoError ? "\n⚠️ OCO failed — monitoring via cron" : ""}${p.settings.dryRun ? "\n<i>[Dry Run]</i>" : ""}`
+    `🟢 <b>OPEN ${p.pair}</b>\nEntry: $${entryPriceActual.toFixed(6)}\nSize: $${p.usdcValue}${slTpLine}\nAI: ${p.aiProvider} (${p.aiConfidence}%)${ocoError ? "\n⚠️ OCO failed — monitoring via cron" : ""}${p.settings.dryRun ? "\n<i>[Dry Run]</i>" : ""}`
   );
 
   // Refresh cached USDC cash snapshot so the dashboard reflects the spent amount.
