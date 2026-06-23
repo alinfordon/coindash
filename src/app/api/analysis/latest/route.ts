@@ -4,6 +4,7 @@ import { Analysis } from "@/models/Analysis";
 import { toObjectId } from "@/lib/tenant";
 import { getApiUserId, apiError } from "@/lib/apiUser";
 import { localizeAnalysisDisplay } from "@/lib/analysisLocale";
+import { ANALYSIS_RETENTION_LIMIT, purgeStaleAnalyses } from "@/lib/analysisRetention";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +13,7 @@ export async function GET() {
     await connectDB();
     const userId = await getApiUserId();
     const uid = toObjectId(userId);
+    await purgeStaleAnalyses(userId);
     const docs = await Analysis.aggregate([
       { $match: { userId: uid } },
       { $sort: { analyzedAt: -1 } },
@@ -23,7 +25,7 @@ export async function GET() {
       },
       { $replaceRoot: { newRoot: "$doc" } },
       { $sort: { confidence: -1, analyzedAt: -1 } },
-      { $limit: 100 },
+      { $limit: ANALYSIS_RETENTION_LIMIT },
     ]);
     const analyses = docs.map((doc) => {
       const localized = localizeAnalysisDisplay(

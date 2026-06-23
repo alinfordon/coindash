@@ -11,10 +11,18 @@ export function isAdmin(role: unknown): boolean {
   return normalizeRole(role) === "admin";
 }
 
-/** VIP + admin can open /dashboard/stats and /api/analytics. */
-export function canAccessStats(role: unknown): boolean {
+/** VIP + admin can open premium sections (stats, portfolio, analytics API). */
+export function canAccessVipFeatures(role: unknown): boolean {
   const r = normalizeRole(role);
   return r === "admin" || r === "vip";
+}
+
+export function canAccessStats(role: unknown): boolean {
+  return canAccessVipFeatures(role);
+}
+
+export function canAccessPortfolio(role: unknown): boolean {
+  return canAccessVipFeatures(role);
 }
 
 export function roleLabel(role: unknown): string {

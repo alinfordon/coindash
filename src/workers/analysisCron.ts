@@ -12,6 +12,7 @@ import { openPosition } from "@/lib/trading";
 import { isPairBlacklisted } from "@/lib/pairBlacklist";
 import { resolveAnalysisIntervals, analysisLookbackCandles } from "@/lib/analysisIntervals";
 import { enabledForEntryTimeframe, needsEntryTimeframeIndicators } from "@/lib/analysisIndicators";
+import { purgeStaleAnalyses } from "@/lib/analysisRetention";
 import {
   compareBuyCandidates,
   entryGateFromSettings,
@@ -351,6 +352,10 @@ async function runAnalysisCronForUser(userId: string, opts: { manual?: boolean }
       insufficientCapital,
     },
   });
+
+  await purgeStaleAnalyses(userId).catch((e) =>
+    console.warn("[analysisCron] purge stale analyses failed:", e?.message)
+  );
 
   return {
     analyzed: results.length,

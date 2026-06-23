@@ -15,6 +15,7 @@ import {
   formatAnalysisCountdown,
 } from "@/lib/analysisSchedule";
 import { SWR_ANALYSIS_LIST, SWR_SETTINGS } from "@/lib/swrDefaults";
+import { ANALYSIS_RETENTION_LIMIT } from "@/lib/analysisConstants";
 
 const fetcher = (url: string) =>
   fetch(url).then((r) => {
@@ -98,7 +99,7 @@ export default function AnalysisPage() {
   useEffect(() => setMounted(true), []);
 
   const testnet = settings?.binanceTestnet ?? true;
-  const items = (data?.analyses || []).slice(0, 32);
+  const items = data?.analyses || [];
   const latestAt = items[0]?.analyzedAt ?? null;
 
   const { trend: settingsTrend, entry: settingsEntry } = normalizeAnalysisIntervalPair(
@@ -128,7 +129,7 @@ export default function AnalysisPage() {
         <div>
           <h1 className="text-3xl font-heading font-bold">Market Analysis</h1>
           <p className="text-sm text-text-muted mt-1 mono">
-            Real Binance TA + AI · per your account
+            Real Binance TA + AI · ultimele {ANALYSIS_RETENTION_LIMIT} analize
             {settings != null && <> · {testnet ? "TESTNET" : "LIVE"} candles</>}
           </p>
           {mounted && latestAt && (

@@ -21,7 +21,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { canAccessStats, roleLabel } from "@/lib/roles";
+import { canAccessStats, canAccessPortfolio, roleLabel } from "@/lib/roles";
 
 type NavItem = {
   href: string;
@@ -68,11 +68,15 @@ function useNavItems(): NavItem[] {
     ...statsNavItem,
     locked: !canAccessStats(role),
   };
+  const portfolioItem: NavItem = {
+    ...portofoliuNavItem,
+    locked: !canAccessPortfolio(role),
+  };
   const items: NavItem[] = [
     coreNav[0],
     ...coreNav.slice(1, 5),
     statsItem,
-    portofoliuNavItem,
+    portfolioItem,
     coreNav[5],
   ];
   if (role === "admin") {
