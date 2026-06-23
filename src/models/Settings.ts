@@ -41,6 +41,15 @@ const SettingsSchema = new Schema(
     analysisTrendInterval: { type: String, default: "1h" },
     /** Secondary TA timeframe (entry timing) for analysis cron. */
     analysisEntryInterval: { type: String, default: "15m" },
+    /** TA modules included in AI market analysis prompt. */
+    analysisIndicators: {
+      rsi: { type: Boolean, default: true },
+      macd: { type: Boolean, default: true },
+      ema: { type: Boolean, default: true },
+      bollinger: { type: Boolean, default: true },
+      fibonacci: { type: Boolean, default: false },
+      elliottWave: { type: Boolean, default: false },
+    },
     stopLossPercent: { type: Number, default: 2 },
     takeProfitPercent: { type: Number, default: 4 },
     riskRewardRatio: { type: Number, default: 2.0 },

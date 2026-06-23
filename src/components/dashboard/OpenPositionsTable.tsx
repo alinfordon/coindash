@@ -5,9 +5,10 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
 import { classOfPnl, fmtDuration, fmtPct, fmtUsd, fmtNum } from "@/lib/utils";
 import { toast } from "sonner";
 import { X, Wand2, Undo2 } from "lucide-react";
+import { SWR_OPEN_TRADES } from "@/lib/swrDefaults";
 
 export function OpenPositionsTable() {
-  const { data, mutate } = useSWR<{ trades: any[] }>("/api/trades/open");
+  const { data, mutate } = useSWR<{ trades: any[] }>("/api/trades/open", undefined, SWR_OPEN_TRADES);
   const trades = data?.trades || [];
 
   async function closeOne(id: string, pair: string) {

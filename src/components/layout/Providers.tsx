@@ -2,11 +2,11 @@
 
 import { SWRConfig } from "swr";
 import { SessionProvider } from "next-auth/react";
+import { SWR_STATIC } from "@/lib/swrDefaults";
 
 const fetcher = (url: string) =>
   fetch(url).then(async (r) => {
     if (r.status === 401) {
-      // Session expired — bounce to login
       if (typeof window !== "undefined") window.location.href = "/login";
       return null;
     }
@@ -19,8 +19,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <SWRConfig
         value={{
           fetcher,
-          refreshInterval: 10000,
-          revalidateOnFocus: true,
+          ...SWR_STATIC,
           shouldRetryOnError: true,
         }}
       >

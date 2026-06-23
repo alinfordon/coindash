@@ -10,7 +10,8 @@ import { AILog } from "@/models/AILog";
 import { Trade } from "@/models/Trade";
 import { openPosition } from "@/lib/trading";
 import { isPairBlacklisted } from "@/lib/pairBlacklist";
-import { resolveAnalysisIntervals } from "@/lib/analysisIntervals";
+import { resolveAnalysisIntervals, analysisLookbackCandles } from "@/lib/analysisIntervals";
+import { enabledForEntryTimeframe, needsEntryTimeframeIndicators } from "@/lib/analysisIndicators";
 import {
   compareBuyCandidates,
   entryGateFromSettings,
@@ -392,11 +393,32 @@ async function analyzePair(userId: string, symbol: string, settings: Awaited<Ret
   ]);
   const closesTrend = cTrend.map((c) => c.close);
   const closesEntry = cEntry.map((c) => c.close);
-  const snap = computeIndicatorSnapshot(closesTrend);
-  const snapEntry = computeIndicatorSnapshot(closesEntry);
+  const highsTrend = cTrend.map((c) => c.high);
+  const lowsTrend = cTrend.map((c) => c.low);
+  const highsEntry = cEntry.map((c) => c.high);
+  const lowsEntry = cEntry.map((c) => c.low);
+  const enabled = settings.analysisIndicators;
+  const trendLookback = analysisLookbackCandles(trend);
+  const entryLookback = analysisLookbackCandles(entry);
+  const snap = computeIndicatorSnapshot(closesTrend, {
+    highs: highsTrend,
+    lows: lowsTrend,
+    lookback: trendLookback,
+    interval: trend,
+  });
+  const entryEnabled = enabledForEntryTimeframe(enabled);
+  const snapEntry = computeIndicatorSnapshot(closesEntry, {
+    highs: highsEntry,
+    lows: lowsEntry,
+    lookback: entryLookback,
+    interval: entry,
+  });
 
-  if (!isIndicatorSnapshotValid(snap)) {
+  if (!isIndicatorSnapshotValid(snap, enabled)) {
     throw new Error(`${symbol}: incomplete ${trend} indicators (need more candle history)`);
+  }
+  if (needsEntryTimeframeIndicators(enabled) && !isIndicatorSnapshotValid(snapEntry, entryEnabled)) {
+    throw new Error(`${symbol}: incomplete ${entry} entry indicators (need more candle history)`);
   }
 
   const prompt = buildAnalysisPrompt({
@@ -404,6 +426,7 @@ async function analyzePair(userId: string, symbol: string, settings: Awaited<Ret
     trendInterval: trend,
     entryInterval: entry,
     price: snap.price,
+    enabled,
     rsi: snap.rsi,
     macdValue: snap.macd.value,
     macdSignal: snap.macd.signal,
@@ -415,10 +438,14 @@ async function analyzePair(userId: string, symbol: string, settings: Awaited<Ret
     ema50: snap.ema50,
     priceVsEma20: snap.priceVsEma20Pct,
     priceVsEma50: snap.priceVsEma50Pct,
-    rsiEntry: snapEntry.rsi,
-    macdHistEntry: snapEntry.macd.histogram,
+    fibonacci: snap.fibonacci,
+    elliottWave: snap.elliottWave,
+    fibonacciEntry: snapEntry.fibonacci,
+    elliottWaveEntry: snapEntry.elliottWave,
+    rsiEntry: enabled.rsi ? snapEntry.rsi : undefined,
+    macdHistEntry: enabled.macd ? snapEntry.macd.histogram : undefined,
     trendEntry: snapEntry.trend5,
-    priceVsEma20Entry: snapEntry.priceVsEma20Pct,
+    priceVsEma20Entry: enabled.ema ? snapEntry.priceVsEma20Pct : undefined,
     change24h: t24.priceChangePercent,
     volume24h: t24.quoteVolume,
     high24h: t24.highPrice,
@@ -473,8 +500,18 @@ async function analyzePair(userId: string, symbol: string, settings: Awaited<Ret
       bb: snap.bb,
       ema20: snap.ema20,
       ema50: snap.ema50,
+      fibonacci: snap.fibonacci,
+      elliottWave: snap.elliottWave,
+      fibonacciEntry: snapEntry.fibonacci,
+      elliottWaveEntry: snapEntry.elliottWave,
+      analysisIndicators: enabled,
       trendInterval: trend,
       entryInterval: entry,
+      trendLookbackCandles: trendLookback,
+      entryLookbackCandles: entryLookback,
+      entryRsi: snapEntry.rsi,
+      entryMacdHist: snapEntry.macd.histogram,
+      entryTrend5: snapEntry.trend5,
       rsi15m: snapEntry.rsi,
       macdHist15m: snapEntry.macd.histogram,
       trend15m: snapEntry.trend5,

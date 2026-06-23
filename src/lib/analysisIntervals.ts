@@ -83,3 +83,25 @@ export function resolveAnalysisIntervals(settings: {
 }): { trend: AnalysisInterval; entry: AnalysisInterval } {
   return normalizeAnalysisIntervalPair(settings.analysisTrendInterval, settings.analysisEntryInterval);
 }
+
+const INTERVAL_MINUTES: Record<AnalysisInterval, number> = {
+  "1m": 1,
+  "3m": 3,
+  "5m": 5,
+  "15m": 15,
+  "30m": 30,
+  "1h": 60,
+  "2h": 120,
+  "4h": 240,
+  "6h": 360,
+  "12h": 720,
+  "1d": 1440,
+  "3d": 4320,
+};
+
+/** Candle count for ~N days of history on a given interval (capped for Binance kline limit). */
+export function analysisLookbackCandles(interval: AnalysisInterval, targetDays = 7): number {
+  const mins = INTERVAL_MINUTES[interval];
+  const target = targetDays * 24 * 60;
+  return Math.min(100, Math.max(20, Math.round(target / mins)));
+}

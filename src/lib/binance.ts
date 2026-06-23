@@ -31,6 +31,15 @@ export function baseUrl(testnet: boolean = true) {
   return testnet ? "https://testnet.binance.vision" : "https://api.binance.com";
 }
 
+/** Binance combined stream WebSocket base (kline, etc.). */
+export function streamWsBase(testnet: boolean = true) {
+  return testnet ? "wss://testnet.binance.vision/ws" : "wss://stream.binance.com:9443/ws";
+}
+
+export function klineStreamUrl(symbol: string, interval: string, testnet = true) {
+  return `${streamWsBase(testnet)}/${symbol.toLowerCase()}@kline_${interval}`;
+}
+
 // ---------- Symbol info (tickSize, stepSize, minNotional) ----------
 export type SymbolInfo = {
   symbol: string;

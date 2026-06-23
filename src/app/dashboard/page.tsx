@@ -13,9 +13,10 @@ import { TopPairs } from "@/components/dashboard/TopPairs";
 import { MarketOverview } from "@/components/dashboard/MarketOverview";
 import { Zap, Pause, ShieldCheck, Activity, Target, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
+import { SWR_DASHBOARD_PAGE } from "@/lib/swrDefaults";
 
 export default function DashboardPage() {
-  const { data: stats, mutate } = useSWR<any>("/api/dashboard/stats");
+  const { data: stats, mutate } = useSWR<any>("/api/dashboard/stats", undefined, SWR_DASHBOARD_PAGE);
 
   async function trigger(path: string, label: string) {
     toast.loading(label, { id: path });

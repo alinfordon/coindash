@@ -2,6 +2,26 @@ import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { RuntimeSettings } from "./settings";
 import { coerceModelForProvider, formatGeminiError, resolveGeminiModel } from "./aiModels";
+import {
+  DEFAULT_ANALYSIS_INDICATORS,
+  type AnalysisIndicatorsConfig,
+} from "./analysisIndicators";
+import type { ElliottWaveSnapshot, FibonacciSnapshot } from "./indicators";
+
+function fibonacciLines(f: FibonacciSnapshot, tfLabel: string): string[] {
+  return [
+    `Fibonacci ${tfLabel} (swing ${f.swingDirection}, ${f.lookbackCandles} candles): high=${num(f.swingHigh)}, low=${num(f.swingLow)}`,
+    `Niveluri ${tfLabel}: 23.6%=${num(f.levels["0.236"])}, 38.2%=${num(f.levels["0.382"])}, 50%=${num(f.levels["0.5"])}, 61.8%=${num(f.levels["0.618"])}, 78.6%=${num(f.levels["0.786"])}`,
+    `Preț lângă ${f.nearestLevel} · retracement ~${num(f.retracementPct, 1)}%`,
+  ];
+}
+
+function elliottLines(e: ElliottWaveSnapshot, tfLabel: string): string[] {
+  return [
+    `Elliott Wave ${tfLabel}: fază=${e.phase}, valuri=${e.waveLegs}, pivoturi=${e.pivotCount}, ultimă mișcare=${num(e.lastMovePct, 2)}%`,
+    `Elliott ${tfLabel}: ${e.summary}`,
+  ];
+}
 
 export type AIProvider = "claude" | "gemini" | "deepseek" | "ollama";
 
@@ -154,17 +174,22 @@ export function buildAnalysisPrompt(d: {
   trendInterval: string;
   entryInterval?: string;
   price: number;
-  rsi: number;
-  macdValue: number;
-  macdSignal: number;
-  macdHist: number;
-  bbUpper: number;
-  bbMiddle: number;
-  bbLower: number;
-  ema20: number;
-  ema50: number;
-  priceVsEma20: number;
-  priceVsEma50: number;
+  enabled?: AnalysisIndicatorsConfig;
+  rsi?: number;
+  macdValue?: number;
+  macdSignal?: number;
+  macdHist?: number;
+  bbUpper?: number;
+  bbMiddle?: number;
+  bbLower?: number;
+  ema20?: number;
+  ema50?: number;
+  priceVsEma20?: number;
+  priceVsEma50?: number;
+  fibonacci?: FibonacciSnapshot | null;
+  elliottWave?: ElliottWaveSnapshot | null;
+  fibonacciEntry?: FibonacciSnapshot | null;
+  elliottWaveEntry?: ElliottWaveSnapshot | null;
   rsiEntry?: number;
   macdHistEntry?: number;
   trendEntry?: string;
@@ -174,14 +199,49 @@ export function buildAnalysisPrompt(d: {
   high24h: number;
   low24h: number;
 }) {
+  const enabled = d.enabled ?? DEFAULT_ANALYSIS_INDICATORS;
+  const trendTf = d.trendInterval.toUpperCase();
+  const entryTf = d.entryInterval?.toUpperCase();
+  const trendLines: string[] = [`Preț curent: ${d.price}`];
+
+  if (enabled.rsi && d.rsi != null) trendLines.push(`RSI(14) [${trendTf}]: ${num(d.rsi)}`);
+  if (enabled.macd && d.macdValue != null) {
+    trendLines.push(
+      `MACD [${trendTf}]: value=${num(d.macdValue)}, signal=${num(d.macdSignal)}, histogram=${num(d.macdHist)}`
+    );
+  }
+  if (enabled.bollinger && d.bbUpper != null) {
+    trendLines.push(
+      `Bollinger [${trendTf}]: upper=${num(d.bbUpper)}, middle=${num(d.bbMiddle)}, lower=${num(d.bbLower)}`
+    );
+  }
+  if (enabled.ema && d.ema20 != null) {
+    trendLines.push(`EMA20/50 [${trendTf}]: ${num(d.ema20)} / ${num(d.ema50)}`);
+    trendLines.push(`Preț vs EMA20 [${trendTf}]: ${num(d.priceVsEma20)}%`);
+    trendLines.push(`Preț vs EMA50 [${trendTf}]: ${num(d.priceVsEma50)}%`);
+  }
+  if (enabled.fibonacci && d.fibonacci) trendLines.push(...fibonacciLines(d.fibonacci, trendTf));
+  if (enabled.elliottWave && d.elliottWave) trendLines.push(...elliottLines(d.elliottWave, trendTf));
+
+  const entryParts: string[] = [];
+  if (enabled.rsi && d.rsiEntry != null) entryParts.push(`RSI(14) [${entryTf}]: ${num(d.rsiEntry)}`);
+  if (enabled.macd && d.macdHistEntry != null) {
+    entryParts.push(`MACD histogram [${entryTf}]: ${num(d.macdHistEntry)}`);
+  }
+  if (enabled.ema && d.priceVsEma20Entry != null) {
+    entryParts.push(`Preț vs EMA20 [${entryTf}]: ${num(d.priceVsEma20Entry)}%`);
+  }
+  if (d.trendEntry) entryParts.push(`Trend ultimele 5 candle [${entryTf}]: ${d.trendEntry}`);
+  if (enabled.fibonacci && d.fibonacciEntry) entryParts.push(...fibonacciLines(d.fibonacciEntry, entryTf ?? "ENTRY"));
+  if (enabled.elliottWave && d.elliottWaveEntry) {
+    entryParts.push(...elliottLines(d.elliottWaveEntry, entryTf ?? "ENTRY"));
+  }
+
   const entryBlock =
-    d.rsiEntry != null
+    entryParts.length && d.entryInterval
       ? `
-TECHNICAL DATA (${d.entryInterval?.toUpperCase() ?? "ENTRY"} timeframe, last 100 candles — entry timing):
-RSI(14): ${num(d.rsiEntry)}
-MACD histogram: ${num(d.macdHistEntry)}
-Price vs EMA20: ${num(d.priceVsEma20Entry)}%
-Trend (last 5 candles): ${d.trendEntry ?? "n/a"}
+DATE TEHNICE ENTRY (${entryTf}, ultimele 100 candle-uri — timing intrare):
+${entryParts.join("\n")}
 `
       : "";
 
@@ -193,14 +253,10 @@ Trend (last 5 candles): ${d.trendEntry ?? "n/a"}
 
   return `Ești un analist crypto expert. Analizează ${d.pair} și oferă o recomandare de trading.
 
-DATE TEHNICE (${d.trendInterval.toUpperCase()}, ultimele 100 candle-uri — context trend):
-Preț curent: ${d.price}
-RSI(14): ${num(d.rsi)}
-MACD: value=${num(d.macdValue)}, signal=${num(d.macdSignal)}, histogram=${num(d.macdHist)}
-Bollinger: upper=${num(d.bbUpper)}, middle=${num(d.bbMiddle)}, lower=${num(d.bbLower)}
-EMA20: ${num(d.ema20)}, EMA50: ${num(d.ema50)}
-Preț vs EMA20: ${num(d.priceVsEma20)}%
-Preț vs EMA50: ${num(d.priceVsEma50)}%
+Timeframes configurate: trend=${trendTf}, entry=${entryTf ?? "n/a"}.
+
+DATE TEHNICE TREND (${trendTf}, ultimele 100 candle-uri — context trend):
+${trendLines.join("\n")}
 ${entryBlock}
 PIAȚĂ:
 Variație 24h: ${num(d.change24h)}%
@@ -211,7 +267,8 @@ REGULI OBLIGATORII:
 - "reasoning" și fiecare element din "keyFactors" TREBUIE să fie în limba română (nu folosi engleza).
 - Păstrează în engleză doar cheile JSON și valorile enum: recommendation, riskLevel.
 - Pentru stablecoin-uri (ex. ${token} legat de USD): explică în română lipsa potențialului de creștere.
-
+- Folosește explicit timeframe-urile ${trendTf} (trend) și ${entryTf ?? "entry"} (intrare) când interpretezi indicatorii.
+${enabled.fibonacci ? "- Integrează nivelurile Fibonacci pe ambele timeframes dacă sunt furnizate.\n" : ""}${enabled.elliottWave ? "- Ia în considerare structura Elliott Wave pe trend și entry.\n" : ""}
 Exemplu pentru stablecoin:
 "reasoning": "${token} este un stablecoin legat de dolar. Datele actuale arată abatere minimă, reflectând stabilitatea pieței, fără potențial de creștere."
 

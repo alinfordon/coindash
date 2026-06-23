@@ -3,6 +3,7 @@ import { Settings } from "@/models/Settings";
 import { decrypt, encrypt } from "./crypto";
 import { fetchPortfolioValueUsdc } from "./binance";
 import { normalizePairBlacklistEntries } from "./pairBlacklistCore";
+import { normalizeAnalysisIndicators, type AnalysisIndicatorsConfig } from "./analysisIndicators";
 import { geminiModelMigrationPatch, providerModelMigrationPatch } from "./aiModels";
 import {
   type AiApiKeys,
@@ -45,6 +46,7 @@ export type RuntimeSettings = {
   defaultReopenCooldownMinutes: number;
   analysisTrendInterval: string;
   analysisEntryInterval: string;
+  analysisIndicators: AnalysisIndicatorsConfig;
   stopLossPercent: number;
   takeProfitPercent: number;
   riskRewardRatio: number;
@@ -85,6 +87,7 @@ const PATCH_KEYS = [
   "defaultReopenCooldownMinutes",
   "analysisTrendInterval",
   "analysisEntryInterval",
+  "analysisIndicators",
   "stopLossPercent",
   "takeProfitPercent",
   "riskRewardRatio",
@@ -132,6 +135,8 @@ export function sanitizeSettingsPatch(patch: Record<string, unknown>): Partial<R
       v = v === true || v === "true";
     } else if (key === "pairBlacklist" && Array.isArray(v)) {
       v = normalizePairBlacklistEntries(v);
+    } else if (key === "analysisIndicators" && v && typeof v === "object") {
+      v = normalizeAnalysisIndicators(v);
     } else if (typeof v === "string") {
       v = v.trim();
     }
@@ -275,6 +280,7 @@ function docToRuntime(doc: Record<string, unknown>): RuntimeSettings {
     aiApiKey: "",
   });
   out.pairBlacklist = normalizePairBlacklistEntries(out.pairBlacklist);
+  out.analysisIndicators = normalizeAnalysisIndicators(doc.analysisIndicators);
   return out as RuntimeSettings;
 }
 

@@ -16,6 +16,11 @@ import {
 } from "@/lib/analysisIntervals";
 import { GEMINI_MODELS, DEEPSEEK_MODELS, geminiModelMigrationPatch, providerModelMigrationPatch } from "@/lib/aiModels";
 import { type CloudAiProvider, EMPTY_AI_API_KEYS } from "@/lib/aiApiKeys";
+import { SWR_SETTINGS } from "@/lib/swrDefaults";
+import {
+  ANALYSIS_INDICATOR_DEFS,
+  normalizeAnalysisIndicators,
+} from "@/lib/analysisIndicators";
 
 const MODELS = {
   claude: ["claude-opus-4-5", "claude-opus-4-8", "claude-sonnet-4-5", "claude-haiku-4-5", "claude-sonnet-4-6"],
@@ -77,6 +82,8 @@ const SETTING_TIPS: Record<string, string> = {
     "Timeframe principal pentru indicatori (EMA, MACD, Bollinger) trimiși la AI. Definește trendul — ex. 1h swing, 4h position.",
   analysisEntryInterval:
     "Timeframe scurt pentru timing intrare (RSI, trend). Folosit și la Position Cron. Trebuie ≤ timeframe trend.",
+  analysisIndicators:
+    "Alege ce indicatori tehnici sunt calculați și trimiși la AI în Analysis Cron. Minim un indicator activ.",
   pilotActive:
     "Comutator master: OFF oprește toate cron-urile automate (analiză + verificare poziții). Nu închide poziții existente.",
   positionCheckCronActive:
@@ -120,7 +127,7 @@ const SETTING_TIPS: Record<string, string> = {
 };
 
 export default function SettingsPage() {
-  const { data, mutate } = useSWR<any>("/api/settings");
+  const { data, mutate } = useSWR<any>("/api/settings", undefined, SWR_SETTINGS);
   const [form, setForm] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [confirmBinance, setConfirmBinance] = useState(false);
@@ -135,6 +142,7 @@ export default function SettingsPage() {
           ...EMPTY_AI_API_KEYS,
           ...(data.aiApiKeys || {}),
         },
+        analysisIndicators: normalizeAnalysisIndicators(data.analysisIndicators),
       };
       if (next.aiProvider === "zai") {
         next.aiProvider = "deepseek";
@@ -445,6 +453,45 @@ export default function SettingsPage() {
         <p className="text-[11px] text-text-muted mono mt-3 leading-relaxed">
           Binance intervals: 1m … 3d (no 4d). Entry timeframe must be ≤ trend timeframe.
         </p>
+
+        <div className="mt-5 pt-5 border-t border-border/60">
+          <SettingLabel tip={SETTING_TIPS.analysisIndicators} label="Indicatori AI · Analysis Cron" />
+          <p className="text-[10px] text-text-muted mono mb-3">
+            Trend: <span className="text-text">{form.analysisTrendInterval ?? "1h"}</span> · Entry:{" "}
+            <span className="text-text">{form.analysisEntryInterval ?? "15m"}</span>. RSI/MACD/EMA/Fibonacci/Elliott
+            pe ambele timeframes; Bollinger doar pe trend.
+          </p>
+          <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
+            {ANALYSIS_INDICATOR_DEFS.map(({ id, label, tip, scope }) => {
+              const cfg = normalizeAnalysisIndicators(form.analysisIndicators);
+              const enabledCount = Object.values(cfg).filter(Boolean).length;
+              const trendTf = form.analysisTrendInterval ?? "1h";
+              const entryTf = form.analysisEntryInterval ?? "15m";
+              const scopeLabel =
+                scope === "trend" ? `doar ${trendTf}` : `${trendTf} + ${entryTf}`;
+              return (
+                <ToggleRow
+                  key={id}
+                  label={`${label} · ${scopeLabel}`}
+                  tip={`${tip} Timeframe: ${scopeLabel}.`}
+                  active={cfg[id]}
+                  onChange={(v) => {
+                    if (!v && enabledCount <= 1) {
+                      toast.error("Trebuie să rămână cel puțin un indicator activ.");
+                      return;
+                    }
+                    set({
+                      analysisIndicators: {
+                        ...cfg,
+                        [id]: v,
+                      },
+                    });
+                  }}
+                />
+              );
+            })}
+          </div>
+        </div>
       </Card>
 
       <div className="space-y-6">

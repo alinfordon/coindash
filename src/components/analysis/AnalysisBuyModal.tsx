@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+import useSWR from "swr";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -12,8 +13,23 @@ import {
 } from "@/components/ui/dialog";
 import { fmtUsd } from "@/lib/utils";
 import { Switch } from "@/components/ui/switch";
-import { OrderPreviewChart } from "@/components/trading/OrderPreviewChart";
+import { AnalysisChartPanelControlled } from "@/components/analysis/AnalysisChartPanel";
+import { AnalysisMetricsGrid } from "@/components/analysis/AnalysisMetricsGrid";
+import type { ChartPriceLine } from "@/components/analysis/MiniChart";
+import type { AnalysisIndicatorsData } from "@/lib/analysisDisplayTypes";
+import {
+  normalizeAnalysisIndicators,
+  type AnalysisIndicatorsConfig,
+} from "@/lib/analysisIndicators";
+import { normalizeAnalysisIntervalPair } from "@/lib/analysisIntervals";
+import { SWR_SETTINGS } from "@/lib/swrDefaults";
 import { Loader2, ShoppingCart, Wallet } from "lucide-react";
+
+const settingsFetcher = (url: string) =>
+  fetch(url).then((r) => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  });
 
 type Preflight = {
   freeUsdc: number | null;
@@ -44,7 +60,10 @@ type ManualTradeModalProps = {
   source?: string;
   confidence?: number;
   reasoning?: string;
-  indicators?: Record<string, unknown>;
+  indicators?: AnalysisIndicatorsData;
+  trendInterval?: string;
+  entryInterval?: string;
+  indicatorConfig?: AnalysisIndicatorsConfig;
   onSuccess?: () => void;
 };
 
@@ -80,8 +99,33 @@ export function ManualTradeModal({
   confidence,
   reasoning,
   indicators,
+  trendInterval,
+  entryInterval,
+  indicatorConfig,
   onSuccess,
 }: ManualTradeModalProps) {
+  const { data: settingsData } = useSWR<{
+    binanceTestnet?: boolean;
+    analysisTrendInterval?: string;
+    analysisEntryInterval?: string;
+    analysisIndicators?: Record<string, boolean>;
+  }>(open ? "/api/settings" : null, settingsFetcher, SWR_SETTINGS);
+
+  const { trend: trendTf, entry: entryTf } = normalizeAnalysisIntervalPair(
+    trendInterval ?? settingsData?.analysisTrendInterval,
+    entryInterval ?? settingsData?.analysisEntryInterval
+  );
+  const visible = useMemo(
+    () => normalizeAnalysisIndicators(indicatorConfig ?? settingsData?.analysisIndicators),
+    [indicatorConfig, settingsData?.analysisIndicators]
+  );
+  const visibleKey = useMemo(() => JSON.stringify(visible), [visible]);
+  const [chartIndicators, setChartIndicators] = useState(visible);
+
+  useEffect(() => {
+    if (open) setChartIndicators(visible);
+  }, [open, visibleKey, visible]);
+
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [preflight, setPreflight] = useState<Preflight | null>(null);
@@ -150,6 +194,27 @@ export function ManualTradeModal({
   const previewSl = refPrice && Number.isFinite(slNum) ? refPrice * (1 - slNum / 100) : null;
   const previewTp = refPrice && tpEffective != null ? refPrice * (1 + tpEffective / 100) : null;
 
+  const chartTestnet = preflight?.testnet ?? settingsData?.binanceTestnet ?? false;
+
+  const tradePriceLines = useMemo((): ChartPriceLine[] => {
+    const lines: ChartPriceLine[] = [];
+    if (refPrice && refPrice > 0) {
+      lines.push({ price: refPrice, color: "#00F5FF", title: "INTRARE", dashed: true });
+    }
+    if (withSlTp && previewSl && previewSl > 0) {
+      lines.push({ price: previewSl, color: "#FF3366", title: "SL" });
+    }
+    if (withSlTp && previewTp && previewTp > 0) {
+      lines.push({ price: previewTp, color: "#00FF88", title: "TP" });
+    }
+    return lines;
+  }, [refPrice, previewSl, previewTp, withSlTp]);
+
+  const metricsCtx = useMemo(
+    () => ({ trendTf, entryTf, visible: chartIndicators }),
+    [trendTf, entryTf, chartIndicators]
+  );
+
   const canSubmit =
     !loading &&
     !submitting &&
@@ -175,7 +240,11 @@ export function ManualTradeModal({
           entryHint: refPrice ?? undefined,
           aiConfidence: confidence ?? 0,
           aiReasoning: reasoning ? `Manual: ${reasoning}` : `Manual buy from ${source}`,
-          indicators,
+          indicators: {
+            ...indicators,
+            trendInterval: trendTf,
+            entryInterval: entryTf,
+          },
         }),
       });
       const j = await r.json();
@@ -200,7 +269,7 @@ export function ManualTradeModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ShoppingCart className="h-5 w-5 text-success" />
@@ -227,14 +296,25 @@ export function ManualTradeModal({
 
         <div className="space-y-4">
           {pair && (
-            <OrderPreviewChart
-              symbol={pair}
-              testnet={preflight?.testnet ?? false}
-              entryPrice={refPrice}
-              stopLoss={previewSl}
-              takeProfit={previewTp}
-              withSlTp={withSlTp}
-            />
+            <>
+              <AnalysisChartPanelControlled
+                symbol={pair}
+                testnet={chartTestnet}
+                defaultInterval={trendTf}
+                indicators={chartIndicators}
+                onIndicatorsChange={setChartIndicators}
+                priceLines={tradePriceLines}
+                showIntervalPicker
+              />
+              {(indicators && Object.keys(indicators).length > 0) && (
+                <div>
+                  <div className="text-[10px] mono uppercase tracking-widest text-text-muted mb-2">
+                    Indicatori scan · {trendTf} / {entryTf}
+                  </div>
+                  <AnalysisMetricsGrid indicators={indicators} ctx={metricsCtx} />
+                </div>
+              )}
+            </>
           )}
 
           {loading ? (

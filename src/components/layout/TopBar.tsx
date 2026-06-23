@@ -5,11 +5,12 @@ import Link from "next/link";
 import { signOut } from "next-auth/react";
 import { Zap, Pause, Cpu, LogOut, User } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SWR_DASHBOARD_STATS } from "@/lib/swrDefaults";
 
 type StatsBrief = { pilotActive: boolean; openPositions: number };
 
 export function TopBar() {
-  const { data } = useSWR<StatsBrief>("/api/dashboard/stats");
+  const { data } = useSWR<StatsBrief>("/api/dashboard/stats", undefined, SWR_DASHBOARD_STATS);
   const pilot = data?.pilotActive ?? false;
   return (
     <header className="sticky top-0 z-20 h-14 border-b border-border/70 bg-surface/60 backdrop-blur-xl flex items-center justify-between px-4 md:px-6">

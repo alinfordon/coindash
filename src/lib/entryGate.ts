@@ -25,8 +25,11 @@ export type EntryCandidate = {
     macd?: { histogram?: number };
     ema20?: number;
     rsi15m?: number;
+    entryRsi?: number;
     macdHist15m?: number;
+    entryMacdHist?: number;
     trend15m?: string;
+    entryTrend5?: string;
     priceChange24h?: number;
   };
 };
@@ -71,21 +74,21 @@ export function passesEntryGate(
   const ind = c.indicators ?? {};
   const price = c.price ?? 0;
   const ema20 = ind.ema20;
-  const macdHist1h = ind.macd?.histogram;
-  const rsi15 = ind.rsi15m;
-  const trend15 = ind.trend15m;
+  const macdHistTrend = ind.macd?.histogram;
+  const rsiEntry = ind.entryRsi ?? ind.rsi15m;
+  const trendEntry = ind.entryTrend5 ?? ind.trend15m;
   const ch24 = ind.priceChange24h;
 
   if (ema20 != null && price > 0 && price < ema20 * 0.997) {
     return { ok: false, reason: `price below EMA20 (${trendLabel})` };
   }
-  if (macdHist1h != null && macdHist1h < 0) {
+  if (macdHistTrend != null && macdHistTrend < 0) {
     return { ok: false, reason: `MACD histogram negative (${trendLabel})` };
   }
-  if (rsi15 != null && Number.isFinite(rsi15) && (rsi15 < 35 || rsi15 > 70)) {
-    return { ok: false, reason: `RSI ${entryLabel} out of range (${rsi15.toFixed(1)})` };
+  if (rsiEntry != null && Number.isFinite(rsiEntry) && (rsiEntry < 35 || rsiEntry > 70)) {
+    return { ok: false, reason: `RSI ${entryLabel} out of range (${rsiEntry.toFixed(1)})` };
   }
-  if (trend15 === "falling") {
+  if (trendEntry === "falling") {
     return { ok: false, reason: `${entryLabel} trend falling` };
   }
   if (ch24 != null && ch24 > config.maxPump24hPct) {
