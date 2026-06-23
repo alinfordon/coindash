@@ -255,6 +255,8 @@ function docToRuntime(doc: Record<string, unknown>): RuntimeSettings {
   if (doc.cashBalanceUsdc != null) out.cashBalanceUsdc = Number(doc.cashBalanceUsdc) || 0;
   if (doc.cashBalanceUpdatedAt != null) out.cashBalanceUpdatedAt = doc.cashBalanceUpdatedAt as Date;
   if (doc.updatedAt != null) out.updatedAt = doc.updatedAt as Date;
+  out.dryRun = doc.dryRun === true;
+  out.binanceTestnet = doc.binanceTestnet !== false;
 
   for (const f of SECRET_FIELDS) {
     if (f === "aiApiKey") continue;

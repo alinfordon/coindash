@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -84,25 +84,39 @@ export function ManualTradeModal({
   const [stopLoss, setStopLoss] = useState("");
   const [takeProfit, setTakeProfit] = useState("");
 
+  useLayoutEffect(() => {
+    if (!open) {
+      setPreflight(null);
+      setLoading(false);
+    }
+  }, [open]);
+
   useEffect(() => {
     if (!open || !pair) return;
     let cancelled = false;
     setLoading(true);
     setPreflight(null);
 
-    fetch(`/api/trades/buy?pair=${encodeURIComponent(pair)}`)
+    fetch(`/api/trades/buy?pair=${encodeURIComponent(pair)}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((j) => {
         if (cancelled) return;
         if (!j.ok && j.error) throw new Error(j.error);
-        setPreflight(j);
+        setPreflight({
+          ...j,
+          dryRun: j.dryRun === true,
+          testnet: j.testnet === true,
+        });
         setUsdc(String(j.maxUsdcPerOrder ?? 50));
         setWithSlTp(true);
         setStopLoss(String(j.stopLossPercent ?? 2));
         setTakeProfit(String(j.takeProfitPercent ?? 4));
       })
       .catch((e: Error) => {
-        if (!cancelled) toast.error(e.message || "Could not load order data");
+        if (!cancelled) {
+          setPreflight(null);
+          toast.error(e.message || "Could not load order data");
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -112,6 +126,10 @@ export function ManualTradeModal({
       cancelled = true;
     };
   }, [open, pair]);
+
+  const isDryRun = preflight?.dryRun === true;
+  const isTestnet = preflight?.testnet === true;
+  const preflightReady = !loading && preflight != null;
 
   const usdcNum = parseFloat(usdc);
   const slNum = parseFloat(stopLoss);
@@ -157,7 +175,7 @@ export function ManualTradeModal({
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || "Order failed");
       toast.success(
-        preflight?.dryRun
+        isDryRun
           ? withSlTp
             ? `[Dry run] ${pair} · $${usdcNum} · SL/TP set`
             : `[Dry run] ${pair} · $${usdcNum} · fără SL/TP`
@@ -184,9 +202,19 @@ export function ManualTradeModal({
           </DialogTitle>
           <DialogDescription>
             Trading manual — ordin MARKET
-            {withSlTp ? " + OCO (SL/TP)" : ", fără SL/TP"}.{" "}
-            {preflight?.dryRun && (
-              <span className="text-warning">Mod dry run — fără ordine reale.</span>
+            {withSlTp ? " + OCO (SL/TP)" : ", fără SL/TP"}.
+            {loading && <span className="text-text-muted"> Se încarcă setările…</span>}
+            {preflightReady && (
+              <>
+                {" "}
+                {isDryRun ? (
+                  <span className="text-warning">Mod dry run — fără ordine reale.</span>
+                ) : isTestnet ? (
+                  <span className="text-primary">Ordine reale pe Binance TESTNET.</span>
+                ) : (
+                  <span className="text-success">Ordine reale pe Binance LIVE.</span>
+                )}
+              </>
             )}
           </DialogDescription>
         </DialogHeader>
@@ -215,11 +243,13 @@ export function ManualTradeModal({
                   <div className="text-sm space-y-0.5 min-w-0">
                     <div className="text-text-muted text-[10px] mono uppercase">Capital USDC</div>
                     <div className="mono text-lg text-text-primary">
-                      {preflight?.dryRun
-                        ? "∞ (dry run)"
-                        : preflight?.freeUsdc != null
-                          ? fmtUsd(preflight.freeUsdc)
-                          : "—"}
+                      {loading
+                        ? "…"
+                        : isDryRun
+                          ? "∞ (dry run)"
+                          : preflight?.freeUsdc != null
+                            ? fmtUsd(preflight.freeUsdc)
+                            : "—"}
                     </div>
                     {preflight?.freeUsdcError && (
                       <div className="text-[10px] text-warning">{preflight.freeUsdcError}</div>

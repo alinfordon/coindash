@@ -1,8 +1,11 @@
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
+import mongoose from "mongoose";
 import { connectDB } from "./db";
 import { User, type UserDoc } from "@/models/User";
 import { sendInviteEmail, isEmailConfigured } from "./email";
+import type { AppRole, MemberRole } from "./roles";
+import { normalizeRole } from "./roles";
 
 const INVITE_DAYS = 7;
 
@@ -10,7 +13,7 @@ export type PublicUser = {
   id: string;
   email: string;
   name: string;
-  role: "admin" | "user";
+  role: AppRole;
   status: "active" | "pending" | "disabled";
   createdAt: string;
   lastLoginAt: string | null;
@@ -22,7 +25,7 @@ function toPublic(u: UserDoc & { invitedBy?: { name?: string } | null }): Public
     id: String(u._id),
     email: u.email,
     name: u.name,
-    role: u.role as "admin" | "user",
+    role: normalizeRole(u.role),
     status: u.status as "active" | "pending" | "disabled",
     createdAt: (u as any).createdAt?.toISOString?.() ?? new Date().toISOString(),
     lastLoginAt: u.lastLoginAt ? u.lastLoginAt.toISOString() : null,
@@ -91,6 +94,7 @@ export async function listUsers(): Promise<PublicUser[]> {
 export async function inviteUser(opts: {
   email: string;
   name: string;
+  role?: MemberRole;
   invitedById: string;
   invitedByName: string;
 }): Promise<{ user: PublicUser; emailSent: boolean }> {
@@ -106,6 +110,7 @@ export async function inviteUser(opts: {
     if (existing.status === "disabled") throw new Error("Contul este dezactivat — reactivează-l din admin");
   }
 
+  const memberRole: MemberRole = opts.role === "vip" ? "vip" : "user";
   const token = crypto.randomBytes(32).toString("hex");
   const inviteExpiresAt = new Date(Date.now() + INVITE_DAYS * 24 * 60 * 60 * 1000);
   const baseUrl = (process.env.NEXTAUTH_URL || "http://localhost:3000").replace(/\/$/, "");
@@ -114,6 +119,7 @@ export async function inviteUser(opts: {
   let doc: UserDoc;
   if (existing) {
     existing.name = opts.name.trim();
+    existing.role = memberRole;
     existing.status = "pending";
     existing.inviteToken = token;
     existing.inviteExpiresAt = inviteExpiresAt;
@@ -125,7 +131,7 @@ export async function inviteUser(opts: {
     doc = await User.create({
       email,
       name: opts.name.trim(),
-      role: "user",
+      role: memberRole,
       status: "pending",
       inviteToken: token,
       inviteExpiresAt,
@@ -185,6 +191,114 @@ export async function setUserStatus(userId: string, status: "active" | "disabled
   }
   await user.save();
   return toPublic(user);
+}
+
+export async function setUserRole(userId: string, role: MemberRole) {
+  await connectDB();
+  const user = await User.findById(userId);
+  if (!user) throw new Error("Utilizator negăsit");
+  if (user.role === "admin") throw new Error("Nu poți schimba rolul administratorilor");
+  user.role = role === "vip" ? "vip" : "user";
+  await user.save();
+  return toPublic(user);
+}
+
+export async function updateUserByAdmin(
+  userId: string,
+  actorId: string,
+  patch: { name?: string; role?: MemberRole; status?: "active" | "disabled" }
+): Promise<PublicUser> {
+  await connectDB();
+  if (!mongoose.isValidObjectId(userId)) throw new Error("ID utilizator invalid");
+
+  const user = await User.findById(userId);
+  if (!user) throw new Error("Utilizator negăsit");
+
+  if (patch.name !== undefined) {
+    const name = patch.name.trim();
+    if (!name) throw new Error("Numele este obligatoriu");
+    user.name = name;
+  }
+
+  if (patch.role !== undefined) {
+    if (user.role === "admin") throw new Error("Nu poți schimba rolul administratorilor");
+    user.role = patch.role === "vip" ? "vip" : "user";
+  }
+
+  if (patch.status !== undefined) {
+    if (userId === actorId && patch.status === "disabled") {
+      throw new Error("Nu îți poți dezactiva propriul cont");
+    }
+    if (user.status === "pending" && patch.status === "active") {
+      if (!user.passwordHash) {
+        throw new Error("Contul nu are parolă — utilizatorul trebuie să accepte invitația");
+      }
+      user.status = "active";
+    } else if (user.status === "pending" && patch.status === "disabled") {
+      user.status = "disabled";
+      user.inviteToken = null;
+      user.inviteExpiresAt = null;
+    } else if (user.status !== "pending") {
+      if (user.role === "admin" && patch.status === "disabled") {
+        const admins = await User.countDocuments({ role: "admin", status: "active", _id: { $ne: user._id } });
+        if (admins === 0) throw new Error("Nu poți dezactiva ultimul administrator");
+      }
+      user.status = patch.status;
+      if (patch.status === "active" && !user.passwordHash) {
+        throw new Error("Contul nu are parolă — retrimite invitația");
+      }
+    } else {
+      throw new Error("Contul este în așteptare — folosește reactivare sau invitație nouă");
+    }
+  }
+
+  try {
+    await user.save();
+  } catch (e: unknown) {
+    if (e instanceof Error && e.name === "ValidationError") {
+      throw new Error(
+        `${e.message} — repornește serverul dacă ai adăugat recent rolul VIP în cod`
+      );
+    }
+    throw e;
+  }
+
+  return toPublic(user);
+}
+
+export async function getUserProfile(userId: string): Promise<PublicUser> {
+  await connectDB();
+  const user = await User.findById(userId).populate("invitedBy", "name").lean();
+  if (!user) throw new Error("Utilizator negăsit");
+  return toPublic(user as any);
+}
+
+export async function updateUserProfile(
+  userId: string,
+  patch: { name?: string; currentPassword?: string; newPassword?: string }
+): Promise<PublicUser> {
+  await connectDB();
+  const user = await User.findById(userId);
+  if (!user) throw new Error("Utilizator negăsit");
+  if (user.status !== "active") throw new Error("Contul nu este activ");
+
+  if (patch.name !== undefined) {
+    const name = patch.name.trim();
+    if (!name) throw new Error("Numele este obligatoriu");
+    user.name = name;
+  }
+
+  if (patch.newPassword !== undefined) {
+    if (!patch.currentPassword) throw new Error("Introdu parola curentă");
+    if (patch.newPassword.length < 8) throw new Error("Parola nouă: minim 8 caractere");
+    if (!user.passwordHash) throw new Error("Contul nu are parolă setată");
+    const ok = await bcrypt.compare(patch.currentPassword, user.passwordHash);
+    if (!ok) throw new Error("Parola curentă este incorectă");
+    user.passwordHash = await bcrypt.hash(patch.newPassword, 12);
+  }
+
+  await user.save();
+  return getUserProfile(userId);
 }
 
 export async function deleteUser(userId: string, actorId: string) {

@@ -1,6 +1,7 @@
 import { type AuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { authenticateUser, ensureBootstrapAdmin } from "./users";
+import { normalizeRole, type AppRole } from "./roles";
 
 export const authOptions: AuthOptions = {
   session: { strategy: "jwt", maxAge: 60 * 60 * 24 * 7 },
@@ -22,7 +23,7 @@ export const authOptions: AuthOptions = {
           return null;
         }
 
-        const role: "admin" | "user" = user.role === "admin" ? "admin" : "user";
+        const role = normalizeRole(user.role);
         return {
           id: String(user._id),
           name: user.name,
@@ -34,19 +35,24 @@ export const authOptions: AuthOptions = {
   ],
   pages: { signIn: "/login" },
   callbacks: {
-    async jwt({ token, user }) {
+    async jwt({ token, user, trigger, session }) {
       if (user) {
         token.uid = user.id;
-        token.role = (user as { role?: "admin" | "user" }).role;
+        token.role = normalizeRole((user as { role?: AppRole }).role);
         token.email = user.email;
+        token.name = user.name;
+      }
+      if (trigger === "update" && session?.name) {
+        token.name = session.name;
       }
       return token;
     },
     async session({ session, token }) {
       if (session.user) {
         session.user.id = token.uid;
-        session.user.role = token.role as "admin" | "user" | undefined;
+        session.user.role = normalizeRole(token.role);
         session.user.email = token.email ?? session.user.email;
+        if (token.name) session.user.name = token.name as string;
       }
       return session;
     },

@@ -52,7 +52,7 @@ export default function PiataPage() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-heading font-bold">Piață</h1>
+          <h1 className="text-3xl font-heading font-bold">Market</h1>
           <p className="text-sm text-text-muted mt-1 mono">
             Doar perechi SPOT tranzacționabile USDC pe Binance · trading manual (fără AI)
             {data?.testnet != null && <> · {data.testnet ? "TESTNET" : "LIVE"}</>}
@@ -148,7 +148,7 @@ export default function PiataPage() {
         }}
         pair={buyTarget?.symbol ?? ""}
         price={buyTarget?.price}
-        source="Piață"
+        source="Market"
       />
     </div>
   );

@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getToken } from "next-auth/jwt";
+import { canAccessStats } from "@/lib/roles";
 
 const PUBLIC_PATHS = [
   "/login",
@@ -11,6 +12,11 @@ const PUBLIC_PATHS = [
 ];
 
 const ADMIN_PATHS = ["/admin", "/api/admin"];
+const STATS_PATHS = ["/dashboard/stats", "/api/analytics"];
+
+function isHtmlNavigation(req: NextRequest) {
+  return req.method === "GET" && req.headers.get("accept")?.includes("text/html");
+}
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
@@ -29,7 +35,18 @@ export async function middleware(req: NextRequest) {
 
   if (ADMIN_PATHS.some((p) => pathname.startsWith(p))) {
     if (token.role !== "admin") {
-      if (req.method === "GET" && req.headers.get("accept")?.includes("text/html")) {
+      if (isHtmlNavigation(req)) {
+        const url = req.nextUrl.clone();
+        url.pathname = "/dashboard";
+        return NextResponse.redirect(url);
+      }
+      return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
+    }
+  }
+
+  if (STATS_PATHS.some((p) => pathname.startsWith(p))) {
+    if (!canAccessStats(token.role)) {
+      if (isHtmlNavigation(req)) {
         const url = req.nextUrl.clone();
         url.pathname = "/dashboard";
         return NextResponse.redirect(url);

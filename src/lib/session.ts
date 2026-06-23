@@ -2,8 +2,9 @@ import { getServerSession } from "next-auth";
 import { getToken } from "next-auth/jwt";
 import type { NextRequest } from "next/server";
 import { authOptions } from "./authOptions";
+import { canAccessStats, isAdmin, normalizeRole, type AppRole } from "./roles";
 
-export type AppRole = "admin" | "user";
+export type { AppRole };
 
 export async function getAppSession() {
   return getServerSession(authOptions);
@@ -22,12 +23,18 @@ export async function requireUserId(): Promise<string> {
 
 export async function requireAdmin() {
   const session = await requireSession();
-  if (session.user.role !== "admin") throw new Error("Forbidden");
+  if (!isAdmin(session.user.role)) throw new Error("Forbidden");
+  return session;
+}
+
+export async function requireStatsAccess() {
+  const session = await requireSession();
+  if (!canAccessStats(session.user.role)) throw new Error("Forbidden");
   return session;
 }
 
 export async function getTokenRole(req: NextRequest): Promise<AppRole | null> {
   const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
-  const role = token?.role as AppRole | undefined;
-  return role === "admin" || role === "user" ? role : null;
+  if (!token?.role) return null;
+  return normalizeRole(token.role);
 }

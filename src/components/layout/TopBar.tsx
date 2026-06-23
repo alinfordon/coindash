@@ -3,7 +3,7 @@
 import useSWR from "swr";
 import Link from "next/link";
 import { signOut } from "next-auth/react";
-import { Zap, Pause, Cpu, LogOut } from "lucide-react";
+import { Zap, Pause, Cpu, LogOut, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type StatsBrief = { pilotActive: boolean; openPositions: number };
@@ -50,6 +50,13 @@ export function TopBar() {
           <span className="pulse-dot" style={{ background: "#7B2FFF" }} />
           {data?.openPositions ?? 0} <span className="hidden sm:inline">OPEN</span>
         </span>
+        <Link
+          href="/profile"
+          title="Profil"
+          className="md:hidden h-8 w-8 rounded-md border border-border hover:border-primary/50 hover:text-primary flex items-center justify-center text-text-muted transition"
+        >
+          <User className="h-4 w-4" />
+        </Link>
         <button
           onClick={() => signOut({ callbackUrl: "/login" })}
           title="Sign out"

@@ -19,6 +19,7 @@ export async function POST(req: Request) {
     const body = await req.json();
     const email = String(body.email || "").trim();
     const name = String(body.name || "").trim();
+    const role = body.role === "vip" ? "vip" : "user";
     if (!email || !email.includes("@")) {
       return NextResponse.json({ ok: false, error: "Email invalid" }, { status: 400 });
     }
@@ -29,6 +30,7 @@ export async function POST(req: Request) {
     const result = await inviteUser({
       email,
       name,
+      role,
       invitedById: session.user.id!,
       invitedByName: session.user.name || "Administrator",
     });

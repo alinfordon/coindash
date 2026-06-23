@@ -5,7 +5,7 @@ const UserSchema = new Schema(
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     name: { type: String, required: true, trim: true },
     passwordHash: { type: String, default: "" },
-    role: { type: String, enum: ["admin", "user"], default: "user" },
+    role: { type: String, enum: ["admin", "user", "vip"], default: "user" },
     status: { type: String, enum: ["active", "pending", "disabled"], default: "pending" },
     inviteToken: { type: String, default: null, index: true, sparse: true },
     inviteExpiresAt: { type: Date, default: null },

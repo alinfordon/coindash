@@ -5,14 +5,15 @@ import { useSession } from "next-auth/react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
-import { Users, UserPlus, Mail, Shield, Ban, Trash2, RefreshCw } from "lucide-react";
+import { Users, UserPlus, Mail, Shield, Ban, Trash2, RefreshCw, Crown, Pencil } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { EditUserDialog, type EditableUser } from "@/components/admin/EditUserDialog";
 
 type UserRow = {
   id: string;
   email: string;
   name: string;
-  role: "admin" | "user";
+  role: "admin" | "user" | "vip";
   status: "active" | "pending" | "disabled";
   createdAt: string;
   lastLoginAt: string | null;
@@ -29,7 +30,9 @@ export default function AdminPage() {
   const { data, mutate, isLoading } = useSWR<{ ok: boolean; users: UserRow[] }>("/api/admin/users");
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
+  const [inviteRole, setInviteRole] = useState<"user" | "vip">("user");
   const [inviting, setInviting] = useState(false);
+  const [editUser, setEditUser] = useState<EditableUser | null>(null);
 
   const users = data?.users ?? [];
 
@@ -40,7 +43,7 @@ export default function AdminPage() {
       const r = await fetch("/api/admin/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, name }),
+        body: JSON.stringify({ email, name, role: inviteRole }),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error);
@@ -77,7 +80,7 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-4xl">
+    <div className="space-y-6 max-w-9xl">
       <div>
         <h1 className="text-3xl font-heading font-bold flex items-center gap-2">
           <Users className="h-8 w-8 text-primary" />
@@ -116,6 +119,17 @@ export default function AdminPage() {
               placeholder="Ion Popescu"
               required
             />
+          </div>
+          <div>
+            <label className="text-[10px] mono uppercase tracking-widest text-text-muted">Tip cont</label>
+            <select
+              className="input mt-1"
+              value={inviteRole}
+              onChange={(e) => setInviteRole(e.target.value as "user" | "vip")}
+            >
+              <option value="user">User — fără Statistics</option>
+              <option value="vip">VIP — acces /dashboard/stats</option>
+            </select>
           </div>
           <div className="sm:col-span-2">
             <button type="submit" disabled={inviting} className="btn-primary">
@@ -161,8 +175,12 @@ export default function AdminPage() {
                         <span className="chip border-primary/40 text-primary inline-flex items-center gap-1">
                           <Shield className="h-3 w-3" /> admin
                         </span>
+                      ) : u.role === "vip" ? (
+                        <span className="chip border-secondary/40 text-secondary inline-flex items-center gap-1">
+                          <Crown className="h-3 w-3" /> VIP
+                        </span>
                       ) : (
-                        <span className="text-text-muted">user</span>
+                        <span className="text-text-muted">User</span>
                       )}
                     </td>
                     <td className="py-3 pr-3">
@@ -172,6 +190,14 @@ export default function AdminPage() {
                     </td>
                     <td className="py-3 text-right">
                       <div className="flex justify-end gap-1 flex-wrap">
+                        <button
+                          type="button"
+                          className="btn-ghost text-xs py-1 px-2"
+                          title="Editează utilizator"
+                          onClick={() => setEditUser(u)}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
                         {u.status === "pending" && (
                           <button
                             type="button"
@@ -239,6 +265,15 @@ export default function AdminPage() {
           </table>
         </div>
       </Card>
+
+      <EditUserDialog
+        user={editUser}
+        isSelf={editUser?.id === session?.user?.id}
+        onOpenChange={(open) => {
+          if (!open) setEditUser(null);
+        }}
+        onSaved={() => mutate()}
+      />
     </div>
   );
 }

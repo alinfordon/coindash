@@ -552,3 +552,76 @@ export function baseAssetOf(symbol: string): string {
   for (const q of quotes) if (symbol.endsWith(q)) return symbol.slice(0, -q.length);
   return symbol;
 }
+
+export type BinanceDepositRecord = {
+  id: string;
+  amount: string;
+  coin: string;
+  network: string;
+  status: number;
+  txId: string;
+  insertTime: number;
+};
+
+/** USDC deposit address on the administrator Binance account (live mainnet). */
+export async function fetchDepositAddress(
+  coin: string,
+  network: string,
+  opts: { apiKey: string; apiSecret: string; testnet?: boolean }
+): Promise<string> {
+  const data = await signedRequest<{ address: string }>(
+    "GET",
+    "/sapi/v1/capital/deposit/address",
+    { coin, network },
+    { apiKey: opts.apiKey, apiSecret: opts.apiSecret, testnet: opts.testnet ?? false }
+  );
+  if (!data.address) throw new Error("Adresa de depozit indisponibilă");
+  return data.address;
+}
+
+/** Search recent successful USDC deposits by blockchain txId. */
+export async function findDepositByTxId(
+  txId: string,
+  opts: {
+    apiKey: string;
+    apiSecret: string;
+    testnet?: boolean;
+    coin?: string;
+    network?: string;
+    lookbackDays?: number;
+  }
+): Promise<BinanceDepositRecord | null> {
+  const normalized = txId.trim().toLowerCase();
+  if (!normalized) return null;
+
+  const coin = opts.coin ?? "USDC";
+  const lookbackDays = opts.lookbackDays ?? 90;
+  const startTime = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
+
+  for (let offset = 0; offset < 5000; offset += 1000) {
+    const rows = await signedRequest<BinanceDepositRecord[]>(
+      "GET",
+      "/sapi/v1/capital/deposit/hisrec",
+      {
+        coin,
+        status: 1,
+        startTime,
+        limit: 1000,
+        offset,
+      },
+      { apiKey: opts.apiKey, apiSecret: opts.apiSecret, testnet: opts.testnet ?? false }
+    );
+
+    const hit = (rows || []).find((row) => {
+      const rowTx = (row.txId || "").trim().toLowerCase();
+      if (rowTx !== normalized && !rowTx.includes(normalized) && !normalized.includes(rowTx)) return false;
+      if (opts.network && row.network && row.network !== opts.network) return false;
+      return row.status === 1;
+    });
+    if (hit) return hit;
+    if (!rows?.length || rows.length < 1000) break;
+  }
+
+  return null;
+}
+

@@ -16,6 +16,11 @@ export function isEmailConfigured(): boolean {
   return Boolean(user && pass);
 }
 
+/** IP for Binance API key restriction — included in invite emails from /admin. */
+export function binanceApiWhitelistIp(): string {
+  return (process.env.BINANCE_API_WHITELIST_IP || "82.78.230.206").trim();
+}
+
 export async function sendInviteEmail(opts: {
   to: string;
   name: string;
@@ -28,6 +33,7 @@ export async function sendInviteEmail(opts: {
     auth: { user, pass },
   });
 
+  const binanceIp = binanceApiWhitelistIp();
   const subject = "Invitație Nexus Trade — creează-ți contul";
   const text = [
     `Salut ${opts.name},`,
@@ -37,6 +43,10 @@ export async function sendInviteEmail(opts: {
     opts.inviteUrl,
     ``,
     `Linkul expiră în 7 zile.`,
+    ``,
+    `Binance API — activare cheie`,
+    `La crearea cheii API Binance (Settings → Binance API), activează restricția IP și adaugă:`,
+    binanceIp,
     ``,
     `Dacă nu te așteptai la acest email, îl poți ignora.`,
   ].join("\n");
@@ -52,6 +62,15 @@ export async function sendInviteEmail(opts: {
         </a>
       </p>
       <p style="font-size:12px;color:#94a3b8;">Link alternativ:<br/><a href="${opts.inviteUrl}" style="color:#67e8f9;">${opts.inviteUrl}</a></p>
+      <div style="margin-top:20px;padding:14px 16px;border-radius:8px;border:1px solid #334155;background:#1e293b;">
+        <p style="margin:0 0 8px;font-size:13px;font-weight:600;color:#fbbf24;">Binance API — activare cheie</p>
+        <p style="margin:0 0 8px;font-size:12px;color:#94a3b8;line-height:1.5;">
+          La crearea cheii API Binance, activează restricția IP și adaugă adresa de mai jos:
+        </p>
+        <p style="margin:0;font-family:ui-monospace,monospace;font-size:15px;font-weight:700;color:#22d3ee;letter-spacing:0.02em;">
+          ${escapeHtml(binanceIp)}
+        </p>
+      </div>
       <p style="font-size:11px;color:#64748b;margin-top:24px;">Expiră în 7 zile. Dacă nu te așteptai la acest email, îl poți ignora.</p>
     </div>
   `;
