@@ -17,9 +17,10 @@ export type AIResponse = {
 export async function callAI(
   prompt: string,
   settings: RuntimeSettings,
-  opts: { role?: "default" | "analysis" } = {}
+  opts: { role?: "default" | "analysis"; maxTokens?: number } = {}
 ): Promise<AIResponse> {
   const t = Date.now();
+  const maxTokens = opts.maxTokens ?? 1024;
   const { provider, model } = resolveAiProfile(settings, opts.role ?? "default");
 
   if (provider === "claude") {
@@ -27,7 +28,7 @@ export async function callAI(
     const client = new Anthropic({ apiKey: settings.aiApiKey });
     const msg = await client.messages.create({
       model,
-      max_tokens: 1024,
+      max_tokens: maxTokens,
       messages: [{ role: "user", content: prompt }],
     });
     const text = msg.content
@@ -68,7 +69,7 @@ export async function callAI(
       body: JSON.stringify({
         model,
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 1024,
+        max_tokens: maxTokens,
         temperature: 0.7,
       }),
     });

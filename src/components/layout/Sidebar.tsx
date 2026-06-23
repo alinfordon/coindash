@@ -17,6 +17,7 @@ import {
   Shield,
   TrendingUp,
   Crown,
+  Briefcase,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -39,6 +40,13 @@ const coreNav: NavItem[] = [
   { href: "/settings", label: "Settings", short: "Cfg", icon: Settings },
 ];
 
+const portofoliuNavItem: NavItem = {
+  href: "/portofoliu",
+  label: "Portofolio",
+  short: "Port",
+  icon: Briefcase,
+};
+
 const statsNavItem: NavItem = {
   href: "/dashboard/stats",
   label: "Statistics",
@@ -60,7 +68,13 @@ function useNavItems(): NavItem[] {
     ...statsNavItem,
     locked: !canAccessStats(role),
   };
-  const items: NavItem[] = [coreNav[0], statsItem, ...coreNav.slice(1)];
+  const items: NavItem[] = [
+    coreNav[0],
+    ...coreNav.slice(1, 5),
+    statsItem,
+    portofoliuNavItem,
+    coreNav[5],
+  ];
   if (role === "admin") {
     return [...items, adminNavItem];
   }
@@ -186,27 +200,25 @@ function SessionCard() {
   );
 }
 
-/** Bottom-fixed navigation for mobile (<md). Icon + short label per route. */
+/** Bottom-fixed navigation for mobile (<md). Scroll when many routes. */
 export function MobileNav() {
   const pathname = usePathname();
   const nav = useNavItems();
-  const cols = nav.length <= 5 ? 5 : nav.length <= 6 ? 6 : 7;
   return (
     <nav
       className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-border/80 bg-surface/80 backdrop-blur-xl"
       style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
     >
-      <div
-        className={cn(
-          "grid",
-          cols === 7 ? "grid-cols-7" : cols === 6 ? "grid-cols-6" : cols === 5 ? "grid-cols-5" : "grid-cols-4"
-        )}
-      >
+      <div className="flex overflow-x-auto overscroll-x-contain">
         {nav.map((n) => {
           const Icon = n.icon;
           if (n.locked) {
             return (
-              <span key={n.href} title="Disponibil pentru VIP" className={lockedMobileNavClass}>
+              <span
+                key={n.href}
+                title="Disponibil pentru VIP"
+                className={cn(lockedMobileNavClass, "min-w-[4.25rem] shrink-0 px-1")}
+              >
                 <span className="relative">
                   <Icon className="h-5 w-5" />
                   <Crown className="h-2.5 w-2.5 text-secondary/70 absolute -top-1 -right-2.5" />
@@ -221,12 +233,12 @@ export function MobileNav() {
               key={n.href}
               href={n.href}
               className={cn(
-                "relative flex flex-col items-center justify-center gap-0.5 py-2.5 text-[10px] mono tracking-widest uppercase transition",
+                "relative flex flex-col items-center justify-center gap-0.5 py-2.5 min-w-[4.25rem] shrink-0 px-1 text-[10px] mono tracking-widest uppercase transition",
                 active ? "text-primary" : "text-text-muted hover:text-text-primary"
               )}
             >
               {active && (
-                <span className="absolute inset-x-3 top-0 h-0.5 rounded-b bg-primary shadow-neon" />
+                <span className="absolute inset-x-2 top-0 h-0.5 rounded-b bg-primary shadow-neon" />
               )}
               <Icon className={cn("h-5 w-5", active && "drop-shadow-[0_0_6px_rgba(0,245,255,0.7)]")} />
               <span>{n.short}</span>

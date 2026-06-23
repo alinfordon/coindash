@@ -36,6 +36,10 @@ type ManualTradeModalProps = {
   onOpenChange: (open: boolean) => void;
   pair: string;
   price?: number;
+  /** Pre-fill USDC amount (e.g. rebalance suggestion). */
+  initialUsdc?: number;
+  /** Default SL/TP switch — portfolio rebalance typically false. */
+  defaultWithSlTp?: boolean;
   /** Where the manual order was opened from (for trade log). */
   source?: string;
   confidence?: number;
@@ -70,6 +74,8 @@ export function ManualTradeModal({
   onOpenChange,
   pair,
   price,
+  initialUsdc,
+  defaultWithSlTp = true,
   source = "manual",
   confidence,
   reasoning,
@@ -107,8 +113,8 @@ export function ManualTradeModal({
           dryRun: j.dryRun === true,
           testnet: j.testnet === true,
         });
-        setUsdc(String(j.maxUsdcPerOrder ?? 50));
-        setWithSlTp(true);
+        setUsdc(String(initialUsdc ?? j.maxUsdcPerOrder ?? 50));
+        setWithSlTp(defaultWithSlTp);
         setStopLoss(String(j.stopLossPercent ?? 2));
         setTakeProfit(String(j.takeProfitPercent ?? 4));
       })
@@ -125,7 +131,7 @@ export function ManualTradeModal({
     return () => {
       cancelled = true;
     };
-  }, [open, pair]);
+  }, [open, pair, initialUsdc, defaultWithSlTp]);
 
   const isDryRun = preflight?.dryRun === true;
   const isTestnet = preflight?.testnet === true;
