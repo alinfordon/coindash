@@ -13,6 +13,7 @@ import { normalizeAnalysisInterval } from "@/lib/analysisIntervals";
 type Props = {
   symbol: string;
   testnet?: boolean;
+  exchange?: "binance" | "kraken";
   /** Starting candle interval (user can change via picker). */
   defaultInterval?: string;
   initialIndicators?: AnalysisIndicatorsConfig;
@@ -25,6 +26,7 @@ type Props = {
 export function AnalysisChartPanel({
   symbol,
   testnet = false,
+  exchange = "binance",
   defaultInterval = "1h",
   initialIndicators,
   indicatorsResetKey,
@@ -52,6 +54,7 @@ export function AnalysisChartPanel({
         key={chartKey}
         symbol={symbol}
         testnet={testnet}
+        exchange={exchange}
         interval={interval}
         indicators={indicators}
         showIntervalPicker={showIntervalPicker}
@@ -72,6 +75,7 @@ export function AnalysisChartPanelControlled({
   onIndicatorsChange,
   symbol,
   testnet,
+  exchange = "binance",
   defaultInterval = "1h",
   priceLines,
   showIntervalPicker = true,
@@ -86,6 +90,7 @@ export function AnalysisChartPanelControlled({
         key={chartKey}
         symbol={symbol}
         testnet={testnet}
+        exchange={exchange}
         interval={interval}
         indicators={indicators}
         showIntervalPicker={showIntervalPicker}

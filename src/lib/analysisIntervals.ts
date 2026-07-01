@@ -1,4 +1,6 @@
 /** Binance kline intervals supported for technical analysis. */
+import { DEFAULT_ANALYSIS_INDICATORS, type AnalysisIndicatorsConfig } from "./analysisIndicators";
+
 export const ANALYSIS_INTERVALS = [
   "1m",
   "3m",
@@ -99,9 +101,30 @@ const INTERVAL_MINUTES: Record<AnalysisInterval, number> = {
   "3d": 4320,
 };
 
-/** Candle count for ~N days of history on a given interval (capped for Binance kline limit). */
-export function analysisLookbackCandles(interval: AnalysisInterval, targetDays = 7): number {
+/** Default swing-lookback window (Fibonacci / Elliott) per interval. */
+export function analysisLookbackCandles(interval: AnalysisInterval, targetDays?: number): number {
   const mins = INTERVAL_MINUTES[interval];
-  const target = targetDays * 24 * 60;
-  return Math.min(100, Math.max(20, Math.round(target / mins)));
+  const days =
+    targetDays ??
+    (mins >= 4320 ? 180 : mins >= 1440 ? 90 : mins >= 240 ? 30 : mins >= 60 ? 14 : 7);
+  const minBars = mins >= 1440 ? 60 : mins >= 240 ? 50 : 20;
+  const target = days * 24 * 60;
+  return Math.min(720, Math.max(minBars, Math.round(target / mins)));
+}
+
+/** Minimum candles to fetch so EMA/MACD/BB have enough history (Kraken returns up to ~720). */
+export function analysisMinFetchCandles(
+  trend: AnalysisInterval,
+  entry: AnalysisInterval,
+  enabled?: AnalysisIndicatorsConfig
+): number {
+  const cfg = enabled ?? DEFAULT_ANALYSIS_INDICATORS;
+  let min = 50;
+  if (cfg.macd) min = Math.max(min, 35);
+  if (cfg.bollinger) min = Math.max(min, 20);
+  if (cfg.rsi) min = Math.max(min, 15);
+  if (cfg.fibonacci || cfg.elliottWave) {
+    min = Math.max(min, analysisLookbackCandles(trend), analysisLookbackCandles(entry));
+  }
+  return Math.min(720, Math.max(100, min));
 }

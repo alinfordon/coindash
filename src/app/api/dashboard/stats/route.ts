@@ -3,7 +3,7 @@ import { connectDB } from "@/lib/db";
 import { Trade } from "@/models/Trade";
 import { Settings } from "@/models/Settings";
 import { getSettings } from "@/lib/settings";
-import { fetchPortfolioValueUsdc, fetchPrice } from "@/lib/binance";
+import { getExchangeAdapter, getExchangeAdapterForTrade } from "@/lib/exchange";
 import { startOfDayInTz } from "@/lib/utils";
 import { dashboardClosedTradeMatch } from "@/lib/dashboardTrades";
 import { userScope, toObjectId } from "@/lib/tenant";
@@ -23,6 +23,7 @@ export async function GET() {
   await connectDB();
   const userId = await getApiUserId();
   const settings = await getSettings(userId);
+  const ex = getExchangeAdapter(settings);
 
   // "Today" = from midnight in the user-configured timezone until now.
   // Defaults to Europe/Bucharest so the window matches the user's wall clock
@@ -41,7 +42,8 @@ export async function GET() {
   let openUnrealized = 0;
   for (const t of openTrades) {
     try {
-      const p = await fetchPrice(t.pair as string, settings.binanceTestnet);
+      const tex = getExchangeAdapterForTrade(settings, t);
+      const p = await tex.fetchPrice(t.pair as string, (t.assetClass as any) || "crypto");
       openUnrealized += (p - (t.entryPrice as number)) * (t.quantity as number);
     } catch {
       /* skip this position's MTM if price lookup fails */
@@ -60,7 +62,7 @@ export async function GET() {
   let portfolioStale = true;
   let portfolioError: string | null = null;
   try {
-    const pv = await fetchPortfolioValueUsdc(settings.binanceTestnet);
+    const pv = await ex.fetchPortfolioValue();
     portfolioValue = pv.total;
     cashBalanceUpdatedAt = new Date();
     portfolioStale = false;
@@ -90,6 +92,7 @@ export async function GET() {
     winRate: +winRate.toFixed(2),
     totalTrades: allClosed.length,
     pilotActive: settings.pilotActive,
+    activeExchange: settings.activeExchange,
     analysisCronActive: settings.analysisCronActive,
     positionCheckCronActive: settings.positionCheckCronActive,
     dryRun: settings.dryRun,

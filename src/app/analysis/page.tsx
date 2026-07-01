@@ -77,6 +77,7 @@ export default function AnalysisPage() {
   const { mutate: globalMutate } = useSWRConfig();
   const { data: settings } = useSWR<{
     binanceTestnet?: boolean;
+    activeExchange?: "binance" | "kraken";
     analysisTrendInterval?: string;
     analysisEntryInterval?: string;
     analysisIndicators?: Record<string, boolean>;
@@ -99,6 +100,13 @@ export default function AnalysisPage() {
   useEffect(() => setMounted(true), []);
 
   const testnet = settings?.binanceTestnet ?? true;
+  const activeExchange = settings?.activeExchange === "kraken" ? "kraken" : "binance";
+  const exchangeLabel =
+    activeExchange === "kraken"
+      ? "Kraken"
+      : testnet
+        ? "Binance TESTNET"
+        : "Binance LIVE";
   const items = data?.analyses || [];
   const latestAt = items[0]?.analyzedAt ?? null;
 
@@ -129,8 +137,8 @@ export default function AnalysisPage() {
         <div>
           <h1 className="text-3xl font-heading font-bold">Market Analysis</h1>
           <p className="text-sm text-text-muted mt-1 mono">
-            Real Binance TA + AI · ultimele {ANALYSIS_RETENTION_LIMIT} analize
-            {settings != null && <> · {testnet ? "TESTNET" : "LIVE"} candles</>}
+            Real TA + AI · ultimele {ANALYSIS_RETENTION_LIMIT} analize
+            {settings != null && <> · {exchangeLabel} candles</>}
           </p>
           {mounted && latestAt && (
             <p className="text-[10px] mono text-text-muted mt-1">
@@ -168,9 +176,11 @@ export default function AnalysisPage() {
       {!error && !isLoading && items.length === 0 && (
         <Card>
           <div className="text-text-muted text-sm space-y-2 p-4">
-            <p>No analyses for your account yet.</p>
+            <p>Nu există analize pentru contul tău.</p>
             <p className="text-[11px] mono">
-              Run Analysis from Dashboard (with AI configured) or wait for the next analysis cron.
+              Rulează <strong className="text-text-primary">Run Analysis</strong> din Dashboard (AI + exchange
+              configurate). Dacă toast-ul arată „0 pairs analyzed”, verifică AI Logs și conexiunea exchange activă
+              (Kraken/Binance).
             </p>
           </div>
         </Card>
@@ -192,6 +202,7 @@ export default function AnalysisPage() {
                   onBuy={() => setBuyTarget(a)}
                   ctx={rowCtx}
                   testnet={testnet}
+                  exchange={activeExchange}
                   formattedAt={mounted ? formatRoDateTime(a.analyzedAt) : undefined}
                 />
               );

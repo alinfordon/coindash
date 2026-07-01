@@ -40,7 +40,7 @@ export default function PortofoliuPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 min-w-0">
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
         <div>
           <h1 className="text-2xl sm:text-3xl font-heading font-bold tracking-tight flex items-center gap-2">
@@ -103,8 +103,8 @@ export default function PortofoliuPage() {
             />
           </div>
 
-          <div className="grid gap-6 lg:grid-cols-2">
-            <Card>
+          <div className="grid gap-6 lg:grid-cols-2 min-w-0">
+            <Card className="min-w-0 overflow-hidden p-4 sm:p-5">
               <div className="mb-4">
                 <h3 className="font-heading text-sm tracking-widest uppercase text-text-muted">
                   Alocare curentă
@@ -116,12 +116,14 @@ export default function PortofoliuPage() {
               />
             </Card>
 
-            <RebalancePlanCard
-              plan={snap.rebalancePlan}
-              threshold={p.rebalanceThresholdPct}
-              needsRebalance={snap.needsRebalance}
-              onTradeSuccess={() => mutate()}
-            />
+            <div className="min-w-0">
+              <RebalancePlanCard
+                plan={snap.rebalancePlan}
+                threshold={p.rebalanceThresholdPct}
+                needsRebalance={snap.needsRebalance}
+                onTradeSuccess={() => mutate()}
+              />
+            </div>
           </div>
 
           <PortfolioAiPanel

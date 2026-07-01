@@ -34,10 +34,11 @@ type Props = {
   onBuy: () => void;
   ctx: AnalysisDisplayContext;
   testnet: boolean;
+  exchange?: "binance" | "kraken";
   formattedAt?: string;
 };
 
-export function AnalysisListRow({ item, expanded, onToggle, onBuy, ctx, testnet, formattedAt }: Props) {
+export function AnalysisListRow({ item, expanded, onToggle, onBuy, ctx, testnet, exchange = "binance", formattedAt }: Props) {
   const summary = summaryChips(item, ctx);
   const [chartIndicators, setChartIndicators] = useState(() => normalizeAnalysisIndicators(ctx.visible));
 
@@ -112,6 +113,7 @@ export function AnalysisListRow({ item, expanded, onToggle, onBuy, ctx, testnet,
             <AnalysisChartPanelControlled
               symbol={item.pair}
               testnet={testnet}
+              exchange={exchange}
               defaultInterval={ctx.trendTf}
               indicators={chartIndicators}
               onIndicatorsChange={setChartIndicators}

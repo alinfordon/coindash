@@ -11,7 +11,7 @@ import {
   startOfNextCalendarYearInTz,
 } from "@/lib/tzCalendar";
 import { getSettings } from "@/lib/settings";
-import { fetchPortfolioValueUsdc } from "@/lib/binance";
+import { getExchangeAdapter } from "@/lib/exchange";
 import { toObjectId } from "@/lib/tenant";
 
 export const RECENT_TRADES_LIMIT = 25;
@@ -672,7 +672,8 @@ export async function computeAnalyticsReport(filters: AnalyticsFilters): Promise
   let portfolioDenominatorUsd = Number(settings.cashBalanceUsdc) || 0;
   let portfolioDenominatorSource: "live" | "snapshot" = "snapshot";
   try {
-    const pv = await fetchPortfolioValueUsdc(settings.binanceTestnet);
+    const ex = getExchangeAdapter(settings);
+    const pv = await ex.fetchPortfolioValue();
     portfolioDenominatorUsd = pv.total;
     portfolioDenominatorSource = "live";
   } catch {

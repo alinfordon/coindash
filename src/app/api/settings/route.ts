@@ -20,7 +20,14 @@ export async function POST(req: Request) {
     const userId = await getApiUserId();
     const body = await req.json();
     const patch: Record<string, unknown> = { ...body };
-    for (const k of ["aiApiKey", "binanceApiKey", "binanceApiSecret", "telegramBotToken"]) {
+    for (const k of [
+      "aiApiKey",
+      "binanceApiKey",
+      "binanceApiSecret",
+      "krakenApiKey",
+      "krakenApiSecret",
+      "telegramBotToken",
+    ]) {
       if (typeof patch[k] === "string" && (patch[k] as string).includes("•")) delete patch[k];
     }
     const strippedKeys = stripRedactedAiApiKeys(patch.aiApiKeys);

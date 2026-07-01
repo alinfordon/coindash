@@ -13,10 +13,20 @@ type Props = {
   accent?: "primary" | "success" | "danger" | "secondary";
   rows: PiataRow[];
   emptyLabel?: string;
+  volumeLabel?: string;
   onBuy: (row: PiataRow) => void;
 };
 
-export function MarketPairTable({ title, subtitle, icon: Icon, accent = "primary", rows, emptyLabel, onBuy }: Props) {
+export function MarketPairTable({
+  title,
+  subtitle,
+  icon: Icon,
+  accent = "primary",
+  rows,
+  emptyLabel,
+  volumeLabel = "Vol USDC",
+  onBuy,
+}: Props) {
   const accentBorder =
     accent === "success"
       ? "border-success/30"
@@ -49,7 +59,7 @@ export function MarketPairTable({ title, subtitle, icon: Icon, accent = "primary
                 <th className="text-left py-2 px-1 font-normal">Pereche</th>
                 <th className="text-right py-2 px-1 font-normal">Preț</th>
                 <th className="text-right py-2 px-1 font-normal">24h</th>
-                <th className="text-right py-2 px-1 font-normal hidden sm:table-cell">Vol USDC</th>
+                <th className="text-right py-2 px-1 font-normal hidden sm:table-cell">{volumeLabel}</th>
                 <th className="text-right py-2 px-1 font-normal w-20" />
               </tr>
             </thead>

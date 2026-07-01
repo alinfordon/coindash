@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSettings } from "@/lib/settings";
-import { fetchAll24h } from "@/lib/binance";
+import { getExchangeAdapter, getExchangeAdapterForTrade } from "@/lib/exchange";
 import { getApiUserId, apiError } from "@/lib/apiUser";
 
 export const dynamic = "force-dynamic";
@@ -25,13 +25,14 @@ export async function GET() {
   try {
   const userId = await getApiUserId();
   const settings = await getSettings(userId);
-  let all: any[] = [];
+  const ex = getExchangeAdapter(settings);
+  let all: Awaited<ReturnType<typeof ex.fetchAll24h>> = [];
   try {
-    all = await fetchAll24h(settings.binanceTestnet);
+    all = await ex.fetchAll24h();
   } catch {}
-  const usdc = all.filter((t) => t.symbol.endsWith("USDC"));
+  const usdc = all.filter((t) => t.symbol.endsWith("USDC") || t.symbol.endsWith("USD"));
 
-  const btc = usdc.find((t) => t.symbol === "BTCUSDC") || null;
+  const btc = usdc.find((t) => t.symbol.startsWith("BTC")) || null;
   const topGainers = [...usdc].sort((a, b) => b.priceChangePercent - a.priceChangePercent).slice(0, 5);
   const topLosers = [...usdc].sort((a, b) => a.priceChangePercent - b.priceChangePercent).slice(0, 5);
 

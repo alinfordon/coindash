@@ -1,17 +1,10 @@
 import { Trade } from "@/models/Trade";
 import { AILog } from "@/models/AILog";
-import {
-  baseAssetOf,
-  fetchAssetBalance,
-  fetchMyTrades,
-  fetchPrice,
-  getOcoOrderList,
-  getOrder,
-  getSymbolInfo,
-  cancelOco,
-} from "./binance";
 import type { RuntimeSettings } from "./settings";
 import { toObjectId, userScope } from "./tenant";
+import { getExchangeAdapter, getExchangeAdapterForTrade } from "./exchange";
+import { tradeExitBundle } from "./exchange/exitOrders";
+import type { AssetClass, ExchangeAdapter } from "./exchange/types";
 
 export type ReconcileResult = {
   pair: string;
@@ -35,6 +28,9 @@ type OpenTrade = {
   takeProfit?: number;
   stopLoss?: number;
   ocoOrderId?: string;
+  exitOrderIds?: string[];
+  exchange?: string;
+  assetClass?: string;
   openedAt?: Date;
   dryRun?: boolean;
 };
@@ -88,15 +84,17 @@ export function allocateBalanceToTrades(
 }
 
 async function queryOcoState(
+  ex: ExchangeAdapter,
   pair: string,
-  ocoOrderId: string,
-  testnet: boolean
+  trade: OpenTrade,
+  assetClass?: AssetClass
 ): Promise<OcoState> {
+  const bundle = tradeExitBundle(trade);
+  if (!bundle) return "UNKNOWN";
   try {
-    const list = await getOcoOrderList(pair, ocoOrderId, testnet);
-    const s = list.listOrderStatus as string;
-    if (s === "EXECUTING") return "EXECUTING";
-    if (s === "ALL_DONE") return "ALL_DONE";
+    const state = await ex.queryExitState(pair, bundle, assetClass);
+    if (state === "EXECUTING") return "EXECUTING";
+    if (state === "ALL_DONE") return "ALL_DONE";
     return "UNKNOWN";
   } catch {
     return "UNKNOWN";
@@ -104,43 +102,28 @@ async function queryOcoState(
 }
 
 async function filledExitFromOco(
+  ex: ExchangeAdapter,
   pair: string,
-  ocoOrderId: string,
-  testnet: boolean
+  trade: OpenTrade,
+  assetClass?: AssetClass
 ): Promise<{ exitPrice: number; orderId?: string } | null> {
-  try {
-    const list = await getOcoOrderList(pair, ocoOrderId, testnet);
-    const legs = (list.orders || []) as { orderId: number }[];
-    for (const leg of legs) {
-      try {
-        const order = await getOrder(pair, leg.orderId, testnet);
-        if (order.status === "FILLED" && +order.executedQty > 0) {
-          const executedQty = +order.executedQty;
-          const quote = +order.cummulativeQuoteQty || +order.cumulativeQuoteQty || 0;
-          const exitPrice = quote > 0 ? quote / executedQty : +order.price;
-          if (exitPrice > 0) return { exitPrice, orderId: String(leg.orderId) };
-        }
-      } catch {
-        /* next leg */
-      }
-    }
-  } catch {
-    /* fall through */
-  }
-  return null;
+  const bundle = tradeExitBundle(trade);
+  if (!bundle) return null;
+  return ex.filledExitPrice(pair, bundle, assetClass);
 }
 
 async function filledExitFromMyTrades(
+  ex: ExchangeAdapter,
   pair: string,
   openedAt: Date | undefined,
   expectedQty: number,
-  testnet: boolean,
+  assetClass?: AssetClass,
   closedAt?: Date
 ): Promise<number | null> {
   const startTime = openedAt ? new Date(openedAt).getTime() - 60_000 : Date.now() - 7 * 86400000;
   const endTime = closedAt ? new Date(closedAt).getTime() + 15 * 60_000 : undefined;
   try {
-    const trades = await fetchMyTrades(pair, { startTime, limit: 100, testnet });
+    const trades = await ex.fetchMyTrades(pair, { startTime: startTime, limit: 100, closedAt: endTime }, assetClass);
     let sells = trades.filter((t) => !t.isBuyer);
     if (endTime) sells = sells.filter((t) => t.time <= endTime);
     sells.sort((a, b) => b.time - a.time);
@@ -171,23 +154,24 @@ async function resolveUnbackedTradeClose(
 }> {
   const pair = t.pair;
   const entry = t.entryPrice as number;
-  const testnet = settings.binanceTestnet;
+  const ex = getExchangeAdapterForTrade(settings, t);
+  const assetClass = (t.assetClass as AssetClass) || "crypto";
 
-  if (t.ocoOrderId) {
-    const ocoFill = await filledExitFromOco(pair, t.ocoOrderId, testnet);
+  if (tradeExitBundle(t)) {
+    const ocoFill = await filledExitFromOco(ex, pair, t, assetClass);
     if (ocoFill) {
       const closedReason = inferCloseReasonFromFill(entry, ocoFill.exitPrice, t.takeProfit, t.stopLoss);
       return {
         closedReason,
         exitPrice: ocoFill.exitPrice,
-        detail: `OCO filled (order ${ocoFill.orderId ?? "leg"}) @ ${ocoFill.exitPrice}`,
+        detail: `Exit order filled (${ocoFill.orderId ?? "leg"}) @ ${ocoFill.exitPrice}`,
         evidence: "oco",
       };
     }
   }
 
   const qty = t.quantity as number;
-  const tradeFill = await filledExitFromMyTrades(pair, t.openedAt, qty, testnet, opts.closedAt);
+  const tradeFill = await filledExitFromMyTrades(ex, pair, t.openedAt, qty, assetClass, opts.closedAt);
   if (tradeFill != null) {
     const closedReason = inferCloseReasonFromFill(entry, tradeFill, t.takeProfit, t.stopLoss);
     return {
@@ -229,7 +213,7 @@ async function classifyAssetTrades(
   trades: OpenTrade[],
   balanceTotal: number,
   minQty: number,
-  testnet: boolean
+  settings: RuntimeSettings
 ): Promise<{ keep: OpenTrade[]; close: OpenTrade[] }> {
   const sorted = [...trades].sort(
     (a, b) => new Date(a.openedAt || 0).getTime() - new Date(b.openedAt || 0).getTime()
@@ -241,15 +225,17 @@ async function classifyAssetTrades(
   for (const t of sorted) {
     const expected = (t.quantity as number) || 0;
 
-    if (t.ocoOrderId) {
-      const oco = await queryOcoState(t.pair, t.ocoOrderId, testnet);
+    if (tradeExitBundle(t)) {
+      const ex = getExchangeAdapterForTrade(settings, t);
+      const assetClass = (t.assetClass as AssetClass) || "crypto";
+      const oco = await queryOcoState(ex, t.pair, t, assetClass);
       if (oco === "EXECUTING") {
         keep.push(t);
         avail = Math.max(0, avail - expected);
         continue;
       }
       if (oco === "ALL_DONE") {
-        const fill = await filledExitFromOco(t.pair, t.ocoOrderId, testnet);
+        const fill = await filledExitFromOco(ex, t.pair, t, assetClass);
         if (fill) {
           close.push(t);
         } else {
@@ -299,29 +285,29 @@ export async function reconcileOpenTrades(
 
   const byAsset = new Map<string, OpenTrade[]>();
   for (const t of live) {
-    const base = baseAssetOf(t.pair);
+    const base = getExchangeAdapterForTrade(settings, t).baseAssetOf(t.pair);
     if (!byAsset.has(base)) byAsset.set(base, []);
     byAsset.get(base)!.push(t);
   }
 
+  const exDefault = getExchangeAdapter(settings);
+
   for (const [base, trades] of byAsset) {
     try {
-      const balance = await fetchAssetBalance(base, settings.binanceTestnet);
-      const samplePair = trades[0].pair;
+      const balance = await exDefault.fetchAssetBalance(base);
+      const sample = trades[0]!;
+      const ex = getExchangeAdapterForTrade(settings, sample);
+      const assetClass = (sample.assetClass as AssetClass) || "crypto";
+      const samplePair = sample.pair;
       const [info, markPrice] = await Promise.all([
-        getSymbolInfo(samplePair, settings.binanceTestnet).catch(() => null),
-        fetchPrice(samplePair, settings.binanceTestnet).catch(() => trades[0].entryPrice as number),
+        ex.getSymbolInfo(samplePair, assetClass).catch(() => null),
+        ex.fetchPrice(samplePair, assetClass).catch(() => sample.entryPrice as number),
       ]);
       const minQty = info?.minQty ?? 0;
       const minNotional = info?.minNotional ?? 0;
       const valueUsdc = balance.total * markPrice;
 
-      let { keep, close: toClose } = await classifyAssetTrades(
-        trades,
-        balance.total,
-        minQty,
-        settings.binanceTestnet
-      );
+      let { keep, close: toClose } = await classifyAssetTrades(trades, balance.total, minQty, settings);
 
       const aggregateDust = balance.total < minQty || valueUsdc < minNotional;
       if (aggregateDust && keep.length === 0 && toClose.length === 0) {
@@ -338,15 +324,18 @@ export async function reconcileOpenTrades(
 
         const pair = t.pair;
         try {
-          if (t.ocoOrderId) {
+          const ex = getExchangeAdapterForTrade(settings, t);
+          const assetClass = (t.assetClass as AssetClass) || "crypto";
+          const bundle = tradeExitBundle(t);
+          if (bundle) {
             try {
-              await cancelOco(pair, t.ocoOrderId, settings.binanceTestnet);
+              await ex.cancelExitOrders(pair, bundle, assetClass);
             } catch {
               /* already gone */
             }
           }
 
-          const price = (await fetchPrice(pair, settings.binanceTestnet).catch(() => null)) ?? markPrice;
+          const price = (await ex.fetchPrice(pair, assetClass).catch(() => null)) ?? markPrice;
           const resolved = await resolveUnbackedTradeClose(t, settings, price);
           const entry = t.entryPrice as number;
           const qty = t.quantity as number;

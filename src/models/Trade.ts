@@ -14,6 +14,12 @@ const TradeSchema = new Schema(
     takeProfit: Number,
     binanceOrderId: String,
     ocoOrderId: String,
+    /** Kraken dual exit orders (TP limit + SL stop) when no native OCO. */
+    exitOrderIds: { type: [String], default: [] },
+    /** Exchange used when opening this trade. */
+    exchange: { type: String, enum: ["binance", "kraken"], default: "binance" },
+    /** Kraken xStocks vs crypto spot. */
+    assetClass: { type: String, enum: ["crypto", "tokenized_asset"], default: "crypto" },
     openedAt: { type: Date, default: Date.now },
     closedAt: Date,
     closedReason: { type: String, enum: ["TP_HIT", "SL_HIT", "AI_DECISION", "MANUAL", "RECONCILED", null], default: null },

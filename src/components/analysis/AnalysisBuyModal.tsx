@@ -38,6 +38,7 @@ type Preflight = {
   alreadyOpen?: boolean;
   dryRun?: boolean;
   testnet?: boolean;
+  exchange?: "binance" | "kraken";
   maxUsdcPerOrder?: number;
   stopLossPercent?: number;
   takeProfitPercent?: number;
@@ -179,6 +180,7 @@ export function ManualTradeModal({
 
   const isDryRun = preflight?.dryRun === true;
   const isTestnet = preflight?.testnet === true;
+  const activeExchange = preflight?.exchange === "kraken" ? "kraken" : "binance";
   const preflightReady = !loading && preflight != null;
 
   const usdcNum = parseFloat(usdc);
@@ -195,6 +197,7 @@ export function ManualTradeModal({
   const previewTp = refPrice && tpEffective != null ? refPrice * (1 + tpEffective / 100) : null;
 
   const chartTestnet = preflight?.testnet ?? settingsData?.binanceTestnet ?? false;
+  const chartExchange = preflight?.exchange ?? settingsData?.activeExchange ?? "binance";
 
   const tradePriceLines = useMemo((): ChartPriceLine[] => {
     const lines: ChartPriceLine[] = [];
@@ -284,6 +287,8 @@ export function ManualTradeModal({
                 {" "}
                 {isDryRun ? (
                   <span className="text-warning">Mod dry run — fără ordine reale.</span>
+                ) : activeExchange === "kraken" ? (
+                  <span className="text-success">Ordine reale pe Kraken (crypto + xStocks).</span>
                 ) : isTestnet ? (
                   <span className="text-primary">Ordine reale pe Binance TESTNET.</span>
                 ) : (
@@ -300,6 +305,7 @@ export function ManualTradeModal({
               <AnalysisChartPanelControlled
                 symbol={pair}
                 testnet={chartTestnet}
+                exchange={chartExchange === "kraken" ? "kraken" : "binance"}
                 defaultInterval={trendTf}
                 indicators={chartIndicators}
                 onIndicatorsChange={setChartIndicators}

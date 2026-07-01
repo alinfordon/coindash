@@ -23,10 +23,11 @@ export const SWR_DASHBOARD_PAGE = {
   refreshInterval: 45_000,
 } as const;
 
-/** Analysis list — cron-driven, no need for aggressive polling. */
+/** Analysis list — refresh after manual cron; light polling on /analysis. */
 export const SWR_ANALYSIS_LIST = {
   ...SWR_STATIC,
-  refreshInterval: 120_000,
+  refreshInterval: 60_000,
+  revalidateOnMount: true,
 } as const;
 
 /** Open positions — moderate when pilot may trade. */

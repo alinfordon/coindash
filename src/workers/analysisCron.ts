@@ -1,7 +1,8 @@
 import { connectDB } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
 import { toObjectId, userScope, listAnalysisCronUserIds } from "@/lib/tenant";
-import { topUsdcPairs, fetchCandles, fetch24h, fetchUsdcBalance, getSymbolInfo } from "@/lib/binance";
+import { getExchangeAdapter } from "@/lib/exchange";
+import { detectKrakenAssetClass } from "@/lib/kraken";
 import { computeIndicatorSnapshot, isIndicatorSnapshotValid } from "@/lib/indicators";
 import { buildAnalysisPrompt, callAI, resolveAiProfile, assertAiReady, safeParseJson } from "@/lib/ai";
 import { ensureRomanianAnalysisCopy } from "@/lib/analysisLocale";
@@ -10,7 +11,11 @@ import { AILog } from "@/models/AILog";
 import { Trade } from "@/models/Trade";
 import { openPosition } from "@/lib/trading";
 import { isPairBlacklisted } from "@/lib/pairBlacklist";
-import { resolveAnalysisIntervals, analysisLookbackCandles } from "@/lib/analysisIntervals";
+import {
+  resolveAnalysisIntervals,
+  analysisLookbackCandles,
+  analysisMinFetchCandles,
+} from "@/lib/analysisIntervals";
 import { enabledForEntryTimeframe, needsEntryTimeframeIndicators } from "@/lib/analysisIndicators";
 import { purgeStaleAnalyses } from "@/lib/analysisRetention";
 import {
@@ -29,7 +34,8 @@ async function hasCapitalForNewOrder(settings: Awaited<ReturnType<typeof getSett
 }> {
   if (settings.dryRun) return { ok: true };
   try {
-    const freeUsdc = await fetchUsdcBalance(settings.binanceTestnet);
+    const ex = getExchangeAdapter(settings);
+    const freeUsdc = await ex.fetchQuoteBalance();
     const required = settings.maxUsdcPerOrder;
     if (freeUsdc + 1e-6 < required) {
       return {
@@ -136,27 +142,37 @@ async function runAnalysisCronForUser(userId: string, opts: { manual?: boolean }
 
   let pairs: { symbol: string; priceChangePercent: number; quoteVolume: number; lastPrice: number; highPrice: number; lowPrice: number; volume: number }[] = [];
   let pairsBeforeBlacklist = 0;
+  let ex: ReturnType<typeof getExchangeAdapter>;
   try {
-    const top = await topUsdcPairs(50, settings.binanceTestnet);
+    ex = getExchangeAdapter(settings);
+  } catch (e: any) {
+    const msg = e?.message || "Exchange not connected";
+    await AILog.create({ userId: uid, action: "CRON_END", decision: "EXCHANGE", reasoning: msg });
+    return { error: msg, analyzed: 0, opened: 0, reason: msg };
+  }
+  try {
+    const top = await ex.topQuotePairs(50);
     pairsBeforeBlacklist = top.length;
     pairs = top.filter((x) => !isPairBlacklisted(x.symbol, settings.pairBlacklist));
   } catch (e: any) {
-    await AILog.create({ userId: uid, action: "ERROR", reasoning: `topUsdcPairs: ${e.message}` });
+    await AILog.create({ userId: uid, action: "ERROR", reasoning: `topQuotePairs: ${e.message}` });
     return { error: e.message };
   }
 
   if (pairs.length === 0) {
     const reason = pairsBeforeBlacklist
       ? `All ${pairsBeforeBlacklist} volume-qualified pairs are blacklisted — check Settings → Pair blacklist`
+      : ex.id === "kraken"
+      ? "No Kraken pairs matched volume filter — check Kraken markets scope in Settings"
       : settings.binanceTestnet
       ? "No USDC pairs on Binance testnet passed volume filter — check network or try live mode"
-      : "No USDC pairs matched volume filter (Binance / network?)";
+      : "No USDC pairs matched volume filter (exchange / network?)";
     await AILog.create({
       userId: uid,
       action: "CRON_END",
       decision: "NO_PAIRS",
       reasoning: reason,
-      meta: { pairsBeforeBlacklist, testnet: settings.binanceTestnet },
+      meta: { pairsBeforeBlacklist, exchange: ex.id, testnet: settings.binanceTestnet },
     });
     return { analyzed: 0, opened: 0, pairsQueued: 0, reason };
   }
@@ -228,10 +244,10 @@ async function runAnalysisCronForUser(userId: string, opts: { manual?: boolean }
   let initialUsdc: number | null = null;
   if (!settings.dryRun) {
     try {
-      initialUsdc = await fetchUsdcBalance(settings.binanceTestnet);
+      initialUsdc = await ex.fetchQuoteBalance();
       remainingUsdc = initialUsdc;
     } catch (e: any) {
-      await AILog.create({ userId: uid, action: "ERROR", reasoning: `fetchUsdcBalance: ${e.message?.slice(0, 200)}` });
+      await AILog.create({ userId: uid, action: "ERROR", reasoning: `fetchQuoteBalance: ${e.message?.slice(0, 200)}` });
       // Fail-safe: if we can't read balance, don't open anything
       remainingUsdc = 0;
     }
@@ -259,7 +275,7 @@ async function runAnalysisCronForUser(userId: string, opts: { manual?: boolean }
     let requiredUsdc = settings.maxUsdcPerOrder;
     if (!settings.dryRun) {
       try {
-        const info = await getSymbolInfo(c.pair, settings.binanceTestnet).catch(() => null);
+        const info = await ex.getSymbolInfo(c.pair).catch(() => null);
         if (info && info.minNotional > requiredUsdc) requiredUsdc = info.minNotional;
       } catch {
         /* ignore, fall back to settings.maxUsdcPerOrder */
@@ -390,11 +406,16 @@ async function runAnalysisCronForUser(userId: string, opts: { manual?: boolean }
 
 async function analyzePair(userId: string, symbol: string, settings: Awaited<ReturnType<typeof getSettings>>) {
   const uid = toObjectId(userId);
+  const ex = getExchangeAdapter(settings);
+  const assetClass =
+    ex.id === "kraken" ? detectKrakenAssetClass(symbol, settings.krakenMarkets || "both") : undefined;
   const { trend, entry } = resolveAnalysisIntervals(settings);
+  const enabled = settings.analysisIndicators;
+  const fetchLimit = analysisMinFetchCandles(trend, entry, enabled);
   const [cTrend, cEntry, t24] = await Promise.all([
-    fetchCandles(symbol, trend, 100, settings.binanceTestnet),
-    fetchCandles(symbol, entry, 100, settings.binanceTestnet),
-    fetch24h(symbol, settings.binanceTestnet),
+    ex.fetchCandles(symbol, trend, fetchLimit, assetClass),
+    ex.fetchCandles(symbol, entry, fetchLimit, assetClass),
+    ex.fetch24h(symbol, assetClass),
   ]);
   const closesTrend = cTrend.map((c) => c.close);
   const closesEntry = cEntry.map((c) => c.close);
@@ -402,7 +423,6 @@ async function analyzePair(userId: string, symbol: string, settings: Awaited<Ret
   const lowsTrend = cTrend.map((c) => c.low);
   const highsEntry = cEntry.map((c) => c.high);
   const lowsEntry = cEntry.map((c) => c.low);
-  const enabled = settings.analysisIndicators;
   const trendLookback = analysisLookbackCandles(trend);
   const entryLookback = analysisLookbackCandles(entry);
   const snap = computeIndicatorSnapshot(closesTrend, {
@@ -420,10 +440,14 @@ async function analyzePair(userId: string, symbol: string, settings: Awaited<Ret
   });
 
   if (!isIndicatorSnapshotValid(snap, enabled)) {
-    throw new Error(`${symbol}: incomplete ${trend} indicators (need more candle history)`);
+    throw new Error(
+      `${symbol}: incomplete ${trend} indicators (${closesTrend.length} candles fetched, need more history for enabled TA)`
+    );
   }
   if (needsEntryTimeframeIndicators(enabled) && !isIndicatorSnapshotValid(snapEntry, entryEnabled)) {
-    throw new Error(`${symbol}: incomplete ${entry} entry indicators (need more candle history)`);
+    throw new Error(
+      `${symbol}: incomplete ${entry} entry indicators (${closesEntry.length} candles fetched, need more history for enabled TA)`
+    );
   }
 
   const prompt = buildAnalysisPrompt({

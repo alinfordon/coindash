@@ -21,6 +21,7 @@ import {
   ANALYSIS_INDICATOR_DEFS,
   normalizeAnalysisIndicators,
 } from "@/lib/analysisIndicators";
+import { ExchangeConnectionsCard } from "@/components/settings/ExchangeConnectionsCard";
 
 const MODELS = {
   claude: ["claude-opus-4-5", "claude-opus-4-8", "claude-sonnet-4-5", "claude-haiku-4-5", "claude-sonnet-4-6"],
@@ -121,7 +122,10 @@ const SETTING_TIPS: Record<string, string> = {
   binanceApiKey: "Cheia API Binance cu permisiuni de citire + trading SPOT. Stocată criptat.",
   binanceApiSecret: "Secretul API Binance. Nu se afișează după salvare.",
   binanceTestnet:
-    "ON = Binance Testnet (fără bani reali). OFF = cont live — ordine reale.",
+    "ON = Binance Testnet (fără bani reali). OFF = cont live — ordine reale. Doar pentru Binance activ.",
+  krakenApiKey: "Cheia API Kraken cu permisiuni Query + Trade (Spot). Stocată criptat.",
+  krakenApiSecret: "Secretul API Kraken (format base64). Nu se afișează după salvare.",
+  activeExchange: "Un singur exchange poate fi activ — trading și sync folosesc conexiunea selectată.",
   telegramBotToken: "Token de la @BotFather pentru notificări deschideri/închideri.",
   telegramChatId: "ID-ul chat-ului sau canalului unde primești alertele botului.",
 };
@@ -197,14 +201,14 @@ export default function SettingsPage() {
   const set = (patch: any) => setForm({ ...form, ...patch });
 
   async function save() {
-    if (
+    const pendingExchangeSecrets =
       (form.binanceApiKey && !form.binanceApiKey.includes("•")) ||
-      (form.binanceApiSecret && !form.binanceApiSecret.includes("•"))
-    ) {
-      if (!confirmBinance) {
-        setConfirmBinance(true);
-        return;
-      }
+      (form.binanceApiSecret && !form.binanceApiSecret.includes("•")) ||
+      (form.krakenApiKey && !form.krakenApiKey.includes("•")) ||
+      (form.krakenApiSecret && !form.krakenApiSecret.includes("•"));
+    if (pendingExchangeSecrets && !confirmBinance) {
+      setConfirmBinance(true);
+      return;
     }
     setSaving(true);
     try {
@@ -234,17 +238,6 @@ export default function SettingsPage() {
     else toast.error(`${label} failed: ${j.error}`, { id: "test-ai" });
   }
 
-  async function testBinance() {
-    toast.loading("Testing Binance…", { id: "test-bin" });
-    const r = await fetch("/api/settings/test-binance", { method: "POST", body: JSON.stringify(form) });
-    const j = await r.json();
-    if (j.ok) {
-      const b = j.balances?.find((x: any) => x.asset === "USDC");
-      toast.success(`Binance OK · USDC: ${b?.free?.toFixed(2) ?? 0}`, { id: "test-bin" });
-    } else {
-      toast.error(`Binance failed: ${j.error}`, { id: "test-bin" });
-    }
-  }
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -495,47 +488,17 @@ export default function SettingsPage() {
       </Card>
 
       <div className="space-y-6">
-      {/* Binance API */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Binance API</CardTitle>
-          <button className="btn" onClick={testBinance}>
-            <PlugZap className="h-4 w-4" /> Test Connection
-          </button>
-        </CardHeader>
-
-        {confirmBinance && (
-          <div className="rounded-lg border border-warning/50 bg-warning/10 p-3 mb-4 text-xs text-warning">
-            <strong>Confirm Save:</strong> You are about to persist new Binance credentials. Click <em>Confirm Save</em> again to proceed.
-          </div>
-        )}
-
-        <div className="grid sm:grid-cols-2 gap-4">
-          <Field
-            label="API Key"
-            tip={SETTING_TIPS.binanceApiKey}
-            type="password"
-            value={form.binanceApiKey || ""}
-            onChange={(v) => set({ binanceApiKey: v })}
-          />
-          <Field
-            label="API Secret"
-            tip={SETTING_TIPS.binanceApiSecret}
-            type="password"
-            value={form.binanceApiSecret || ""}
-            onChange={(v) => set({ binanceApiSecret: v })}
-          />
-        </div>
-
-        <div className="mt-4">
-          <ToggleRow
-            label={form.binanceTestnet ? "Testnet (safe)" : "Live Trading (real money)"}
-            tip={SETTING_TIPS.binanceTestnet}
-            active={!!form.binanceTestnet}
-            onChange={(v) => set({ binanceTestnet: v })}
-          />
-        </div>
-      </Card>
+      <ExchangeConnectionsCard
+        form={form}
+        set={set}
+        confirmExchangeSave={confirmBinance}
+        onConfirmExchangeSave={setConfirmBinance}
+        onSaved={(settings) => {
+          setForm(settings);
+          mutate(settings);
+          setConfirmBinance(false);
+        }}
+      />
 
       {/* Notifications */}
       <Card>

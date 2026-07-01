@@ -2,6 +2,14 @@ import { connectDB } from "./db";
 import { Settings } from "@/models/Settings";
 import { decrypt, encrypt } from "./crypto";
 import { fetchPortfolioValueUsdc } from "./binance";
+import { fetchKrakenUsdcBalance, krakenFetchPortfolioValue } from "./kraken";
+import { getExchangeAdapter } from "./exchange";
+import {
+  type ExchangeId,
+  getActiveExchange,
+  isExchangeConnected,
+  resolveActiveExchange,
+} from "./exchanges";
 import { normalizePairBlacklistEntries } from "./pairBlacklistCore";
 import { normalizeAnalysisIndicators, type AnalysisIndicatorsConfig } from "./analysisIndicators";
 import { geminiModelMigrationPatch, providerModelMigrationPatch } from "./aiModels";
@@ -30,6 +38,10 @@ export type RuntimeSettings = {
   binanceApiKey: string;
   binanceApiSecret: string;
   binanceTestnet: boolean;
+  activeExchange: ExchangeId;
+  krakenApiKey: string;
+  krakenApiSecret: string;
+  krakenMarkets: "crypto" | "stocks" | "both";
   pilotActive: boolean;
   positionCheckCronActive: boolean;
   analysisCronActive: boolean;
@@ -59,7 +71,14 @@ export type RuntimeSettings = {
   updatedAt?: Date;
 };
 
-const SECRET_FIELDS = ["aiApiKey", "binanceApiKey", "binanceApiSecret", "telegramBotToken"] as const;
+const SECRET_FIELDS = [
+  "aiApiKey",
+  "binanceApiKey",
+  "binanceApiSecret",
+  "krakenApiKey",
+  "krakenApiSecret",
+  "telegramBotToken",
+] as const;
 
 const PATCH_KEYS = [
   "aiProvider",
@@ -71,6 +90,10 @@ const PATCH_KEYS = [
   "binanceApiKey",
   "binanceApiSecret",
   "binanceTestnet",
+  "activeExchange",
+  "krakenApiKey",
+  "krakenApiSecret",
+  "krakenMarkets",
   "pilotActive",
   "positionCheckCronActive",
   "analysisCronActive",
@@ -137,6 +160,10 @@ export function sanitizeSettingsPatch(patch: Record<string, unknown>): Partial<R
       v = normalizePairBlacklistEntries(v);
     } else if (key === "analysisIndicators" && v && typeof v === "object") {
       v = normalizeAnalysisIndicators(v);
+    } else if (key === "activeExchange") {
+      v = v === "kraken" ? "kraken" : "binance";
+    } else if (key === "krakenMarkets") {
+      v = v === "crypto" || v === "stocks" ? v : "both";
     } else if (typeof v === "string") {
       v = v.trim();
     }
@@ -238,6 +265,10 @@ function defaultSettingsPayload(fromEnv: boolean) {
     binanceApiKey: fromEnv ? encrypt(process.env.BINANCE_API_KEY || "") : "",
     binanceApiSecret: fromEnv ? encrypt(process.env.BINANCE_API_SECRET || "") : "",
     binanceTestnet: fromEnv ? (process.env.BINANCE_TESTNET || "true") === "true" : true,
+    activeExchange: "binance" as ExchangeId,
+    krakenApiKey: "",
+    krakenApiSecret: "",
+    krakenMarkets: "both" as const,
     dryRun: true,
     pilotActive: false,
     pairBlacklist: [] as string[],
@@ -262,6 +293,9 @@ function docToRuntime(doc: Record<string, unknown>): RuntimeSettings {
   if (doc.updatedAt != null) out.updatedAt = doc.updatedAt as Date;
   out.dryRun = doc.dryRun === true;
   out.binanceTestnet = doc.binanceTestnet !== false;
+  out.activeExchange = getActiveExchange(doc.activeExchange);
+  out.krakenMarkets =
+    doc.krakenMarkets === "crypto" || doc.krakenMarkets === "stocks" ? doc.krakenMarkets : "both";
 
   for (const f of SECRET_FIELDS) {
     if (f === "aiApiKey") continue;
@@ -402,6 +436,32 @@ export async function updateSettings(
     return out;
   }
 
+  const mergedPreview = docToRuntime({
+    ...(current || {}),
+    ...update,
+  } as Record<string, unknown>);
+
+  if ("activeExchange" in update) {
+    const desired = getActiveExchange(update.activeExchange);
+    if (!isExchangeConnected(mergedPreview, desired)) {
+      throw new Error(
+        `${desired === "kraken" ? "Kraken" : "Binance"} nu este conectat — adaugă cheile API sau alege alt exchange activ.`
+      );
+    }
+    update.activeExchange = desired;
+  }
+
+  const clearingBinance = update.binanceApiKey === "" || update.binanceApiSecret === "";
+  const clearingKraken = update.krakenApiKey === "" || update.krakenApiSecret === "";
+  if (clearingBinance && getActiveExchange(mergedPreview) === "binance") {
+    if (isExchangeConnected(mergedPreview, "kraken")) update.activeExchange = "kraken";
+    else throw new Error("Binance este activ — nu poți deconecta fără alt exchange conectat.");
+  }
+  if (clearingKraken && getActiveExchange(mergedPreview) === "kraken") {
+    if (isExchangeConnected(mergedPreview, "binance")) update.activeExchange = "binance";
+    else throw new Error("Kraken este activ — nu poți deconecta fără alt exchange conectat.");
+  }
+
   const setOnInsert: Record<string, unknown> = { userId: uid, ...defaultSettingsPayload(false) };
   for (const key of Object.keys(update)) delete setOnInsert[key];
 
@@ -435,6 +495,9 @@ export function syncToEnv(s: RuntimeSettings) {
   process.env.BINANCE_API_KEY = s.binanceApiKey || "";
   process.env.BINANCE_API_SECRET = s.binanceApiSecret || "";
   process.env.BINANCE_TESTNET = String(s.binanceTestnet);
+  process.env.KRAKEN_API_KEY = s.krakenApiKey || "";
+  process.env.KRAKEN_API_SECRET = s.krakenApiSecret || "";
+  process.env.ACTIVE_EXCHANGE = resolveActiveExchange(s);
   if (s.telegramBotToken) process.env.TELEGRAM_BOT_TOKEN = s.telegramBotToken;
   if (s.telegramChatId) process.env.TELEGRAM_CHAT_ID = s.telegramChatId;
 }
@@ -454,11 +517,30 @@ export async function syncCashBalanceFromBinance(
   const uid = toObjectId(userId);
   try {
     const current = await Settings.findOne({ userId: uid }).lean();
-    const net = typeof testnet === "boolean" ? testnet : (current as any)?.binanceTestnet ?? true;
     const s = docToRuntime((current || {}) as Record<string, unknown>);
     syncToEnv(s);
-    const pv = await fetchPortfolioValueUsdc(net);
+    const ex = getExchangeAdapter(s);
     const now = new Date();
+
+    if (ex.id === "kraken") {
+      const pv = await ex.fetchPortfolioValue();
+      await Settings.findOneAndUpdate(
+        { userId: uid },
+        { $set: { cashBalanceUsdc: pv.total, cashBalanceUpdatedAt: now } },
+        { upsert: true }
+      );
+      return {
+        total: pv.total,
+        updatedAt: now,
+        error: null,
+        breakdown: pv.assets,
+        unpriced: pv.assets.filter((a) => a.price === 0).map((a) => ({ asset: a.asset, qty: a.qty })),
+        tickerOk: pv.tickerOk,
+      };
+    }
+
+    const net = typeof testnet === "boolean" ? testnet : s.binanceTestnet ?? true;
+    const pv = await fetchPortfolioValueUsdc(net);
     await Settings.findOneAndUpdate(
       { userId: uid },
       { $set: { cashBalanceUsdc: pv.total, cashBalanceUpdatedAt: now } },
@@ -499,6 +581,9 @@ export function redact(s: RuntimeSettings) {
     aiApiKey: cloud ? aiApiKeys[cloud] : "",
     binanceApiKey: m(s.binanceApiKey),
     binanceApiSecret: m(s.binanceApiSecret),
+    krakenApiKey: m(s.krakenApiKey),
+    krakenApiSecret: m(s.krakenApiSecret),
+    activeExchange: resolveActiveExchange(s),
     telegramBotToken: m(s.telegramBotToken),
   };
 }

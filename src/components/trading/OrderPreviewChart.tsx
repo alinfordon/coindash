@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { baseUrl } from "@/lib/binance";
 import { fmtUsd } from "@/lib/utils";
+import { guessKrakenAssetClass } from "@/lib/krakenWs";
 import { Loader2 } from "lucide-react";
 
 type Interval = "15m" | "1h" | "4h";
@@ -10,6 +10,7 @@ type Interval = "15m" | "1h" | "4h";
 type Props = {
   symbol: string;
   testnet?: boolean;
+  exchange?: "binance" | "kraken";
   entryPrice?: number | null;
   stopLoss?: number | null;
   takeProfit?: number | null;
@@ -22,6 +23,7 @@ const INTERVALS: Interval[] = ["15m", "1h", "4h"];
 export function OrderPreviewChart({
   symbol,
   testnet = false,
+  exchange = "binance",
   entryPrice,
   stopLoss,
   takeProfit,
@@ -83,18 +85,28 @@ export function OrderPreviewChart({
       seriesRef.current = series;
 
       try {
-        const api = baseUrl(testnet);
-        const r = await fetch(`${api}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=120`);
+        const assetClass = exchange === "kraken" ? guessKrakenAssetClass(symbol) : "crypto";
+        const qs = new URLSearchParams({ pair: symbol, interval, limit: "120", assetClass });
+        const r = await fetch(`/api/market/candles?${qs}`);
         if (!r.ok) throw new Error(`klines ${r.status}`);
-        const d: any[] = await r.json();
-        if (!Array.isArray(d) || d.length === 0) throw new Error("no candles");
+        const payload = await r.json();
+        if (!payload.ok || !Array.isArray(payload.candles) || payload.candles.length === 0) {
+          throw new Error("no candles");
+        }
+        const d = payload.candles as {
+          openTime: number;
+          open: number;
+          high: number;
+          low: number;
+          close: number;
+        }[];
 
         const data = d.map((c) => ({
-          time: Math.floor(c[0] / 1000) as any,
-          open: +c[1],
-          high: +c[2],
-          low: +c[3],
-          close: +c[4],
+          time: Math.floor(Number(c.openTime) / 1000) as any,
+          open: +c.open,
+          high: +c.high,
+          low: +c.low,
+          close: +c.close,
         }));
         const close = data[data.length - 1]?.close ?? null;
         lastCloseRef.current = close;
@@ -121,7 +133,7 @@ export function OrderPreviewChart({
       seriesRef.current = null;
       priceLinesRef.current = [];
     };
-  }, [symbol, testnet, interval, height]);
+  }, [symbol, testnet, exchange, interval, height]);
 
   useEffect(() => {
     const series = seriesRef.current;
@@ -216,7 +228,7 @@ export function OrderPreviewChart({
             className="absolute inset-0 z-10 flex items-center justify-center text-[10px] mono text-danger/90 bg-surface/60 px-3 text-center"
             style={{ minHeight: height }}
           >
-            Grafic indisponibil ({testnet ? "testnet" : "live"} · {symbol})
+            Grafic indisponibil ({exchange === "kraken" ? "Kraken" : testnet ? "testnet" : "live"} · {symbol})
           </div>
         )}
         <div ref={containerRef} className="w-full" style={{ minHeight: height }} />

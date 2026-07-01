@@ -1,7 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { baseUrl, klineStreamUrl } from "@/lib/binance";
+import { klineStreamUrl } from "@/lib/binance";
+import {
+  guessKrakenAssetClass,
+  krakenOhlcSubscribe,
+  krakenPingMessage,
+  KRAKEN_WS_V2,
+  parseKrakenOhlcV2Message,
+  symbolToKrakenWsName,
+} from "@/lib/krakenWs";
 import {
   DEFAULT_ANALYSIS_INDICATORS,
   normalizeAnalysisIndicators,
@@ -31,6 +39,7 @@ export type ChartPriceLine = {
 type Props = {
   symbol: string;
   testnet?: boolean;
+  exchange?: "binance" | "kraken";
   interval?: string;
   title?: string;
   indicators?: AnalysisIndicatorsConfig;
@@ -121,6 +130,7 @@ function applyIndicatorOverlays(
 export function MiniCandles({
   symbol,
   testnet = false,
+  exchange = "binance",
   interval: intervalProp = "1h",
   title,
   indicators: indicatorsProp,
@@ -164,6 +174,8 @@ export function MiniCandles({
     let cancelled = false;
     let chart: any = null;
     let resizeHandler: (() => void) | null = null;
+    let pingTimer: ReturnType<typeof setInterval> | null = null;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
     candleSeriesRef.current = null;
     tradePriceLineRefs.current = [];
     fibLineRefsRef.current = [];
@@ -172,6 +184,138 @@ export function MiniCandles({
 
     const isActive = () => !cancelled && chart != null && ref.current != null;
 
+    let overlayLineStyle: { Dashed: number; Solid: number } = { Dashed: 2, Solid: 0 };
+
+    function normalizeLiveCandle(candle: ChartCandle): ChartCandle | null {
+      const time = typeof candle.time === "number" ? candle.time : Number(candle.time);
+      if (!Number.isFinite(time) || time <= 0) return null;
+      const open = +candle.open;
+      const high = +candle.high;
+      const low = +candle.low;
+      const close = +candle.close;
+      if (![open, high, low, close].every(Number.isFinite)) return null;
+      return { time: Math.floor(time), open, high, low, close };
+    }
+
+    function applyLiveCandles(incoming: ChartCandle[]) {
+      const ticks = incoming.map(normalizeLiveCandle).filter((c): c is ChartCandle => c != null);
+      if (!ticks.length || !isActive() || !candleSeriesRef.current) return;
+
+      if (ticks.length === 1) {
+        applyLiveCandle(ticks[0]!);
+        return;
+      }
+
+      const byTime = new Map<number, ChartCandle>();
+      for (const c of candlesRef.current) byTime.set(c.time, c);
+      for (const c of ticks) byTime.set(c.time, c);
+      const merged = [...byTime.values()].sort((a, b) => a.time - b.time);
+      const trimmed = merged.length > 300 ? merged.slice(-300) : merged;
+      candlesRef.current = trimmed;
+
+      candleSeriesRef.current.setData(
+        trimmed.map((c) => ({
+          time: c.time as never,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+        }))
+      );
+
+      applyIndicatorOverlays(
+        trimmed,
+        interval,
+        indicatorsRef.current,
+        candleSeriesRef.current,
+        overlaySeriesRef.current,
+        fibLineRefsRef.current,
+        overlayLineStyle
+      );
+
+      const last = trimmed[trimmed.length - 1];
+      if (last) setLivePrice(last.close);
+    }
+
+    function applyLiveCandle(candle: ChartCandle) {
+      const normalized = normalizeLiveCandle(candle);
+      if (!normalized || !isActive() || !candleSeriesRef.current) return;
+
+      const all = candlesRef.current;
+      const last = all[all.length - 1];
+      if (last && normalized.time < last.time) {
+        return;
+      }
+
+      if (last && last.time === normalized.time) {
+        all[all.length - 1] = normalized;
+      } else if (!last || normalized.time > last.time) {
+        all.push(normalized);
+        if (all.length > 300) all.shift();
+      } else {
+        return;
+      }
+
+      try {
+        candleSeriesRef.current.update({
+          time: normalized.time as never,
+          open: normalized.open,
+          high: normalized.high,
+          low: normalized.low,
+          close: normalized.close,
+        });
+      } catch {
+        return;
+      }
+
+      applyIndicatorOverlays(
+        all,
+        interval,
+        indicatorsRef.current,
+        candleSeriesRef.current,
+        overlaySeriesRef.current,
+        fibLineRefsRef.current,
+        overlayLineStyle
+      );
+
+      setLivePrice(normalized.close);
+    }
+
+    async function refreshLatestCandle() {
+      if (!isActive()) return;
+      try {
+        const assetClass = exchange === "kraken" ? guessKrakenAssetClass(symbol) : "crypto";
+        const qs = new URLSearchParams({
+          pair: symbol,
+          interval,
+          limit: "2",
+          assetClass,
+        });
+        const r = await fetch(`/api/market/candles?${qs}`);
+        if (!r.ok || !isActive()) return;
+        const payload = await r.json();
+        const rows = payload.candles as { openTime: number; open: number; high: number; low: number; close: number }[];
+        const last = rows?.[rows.length - 1];
+        if (!last) return;
+        applyLiveCandle({
+          time: Math.floor(Number(last.openTime) / 1000),
+          open: +last.open,
+          high: +last.high,
+          low: +last.low,
+          close: +last.close,
+        });
+        if (!cancelled) setWsState("open");
+      } catch {
+        /* ignore poll errors */
+      }
+    }
+
+    function startKrakenPolling() {
+      if (pollTimer) return;
+      pollTimer = setInterval(() => void refreshLatestCandle(), 15_000);
+      if (!cancelled) setWsState("open");
+    }
+
     async function init() {
       if (!ref.current) return;
       setStatus("loading");
@@ -179,6 +323,7 @@ export function MiniCandles({
       setLivePrice(null);
 
       const { createChart, ColorType, LineStyle } = await import("lightweight-charts");
+      overlayLineStyle = LineStyle;
       if (!ref.current || cancelled) return;
 
       ref.current.innerHTML = "";
@@ -272,20 +417,42 @@ export function MiniCandles({
         chart.priceScale("macd").applyOptions({ scaleMargins: layout.macd });
       }
 
-      try {
-        const api = baseUrl(testnet);
-        const r = await fetch(`${api}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=120`);
-        if (!isActive()) return;
-        if (!r.ok) throw new Error(`klines ${r.status}`);
-        const d: unknown = await r.json();
-        if (!Array.isArray(d) || d.length === 0) throw new Error("no candles");
+      let krakenWsMeta: {
+        wsSymbol?: string;
+        krakenIntervalMinutes?: number | null;
+        wsSupported?: boolean;
+      } = {};
 
-        const candles: ChartCandle[] = d.map((c: unknown[]) => ({
-          time: Math.floor(Number(c[0]) / 1000),
-          open: +c[1],
-          high: +c[2],
-          low: +c[3],
-          close: +c[4],
+      try {
+        const assetClass = exchange === "kraken" ? guessKrakenAssetClass(symbol) : "crypto";
+        const qs = new URLSearchParams({
+          pair: symbol,
+          interval,
+          limit: "120",
+          assetClass,
+        });
+        const r = await fetch(`/api/market/candles?${qs}`);
+        if (!isActive()) return;
+        if (!r.ok) throw new Error(`candles ${r.status}`);
+        const payload = await r.json();
+        if (!payload.ok || !Array.isArray(payload.candles) || payload.candles.length === 0) {
+          throw new Error("no candles");
+        }
+        if (exchange === "kraken") {
+          krakenWsMeta = {
+            wsSymbol: payload.wsSymbol,
+            krakenIntervalMinutes: payload.krakenIntervalMinutes,
+            wsSupported: payload.wsSupported,
+          };
+        }
+        const d = payload.candles as { openTime: number; open: number; high: number; low: number; close: number }[];
+
+        const candles: ChartCandle[] = d.map((c) => ({
+          time: Math.floor(Number(c.openTime) / 1000),
+          open: +c.open,
+          high: +c.high,
+          low: +c.low,
+          close: +c.close,
         }));
         candlesRef.current = candles;
 
@@ -323,67 +490,88 @@ export function MiniCandles({
 
       if (!isActive()) return;
 
-      const wsUrl = klineStreamUrl(symbol, interval, testnet);
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-      setWsState("connecting");
+      if (exchange === "binance") {
+        const wsUrl = klineStreamUrl(symbol, interval, testnet);
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
+        setWsState("connecting");
 
-      ws.onopen = () => {
-        if (!cancelled) setWsState("open");
-      };
-      ws.onclose = () => {
-        if (!cancelled) setWsState("closed");
-      };
-      ws.onerror = () => {
-        if (!cancelled) setWsState("closed");
-      };
-      ws.onmessage = (ev) => {
-        if (cancelled || !candleSeriesRef.current) return;
-        try {
-          const msg = JSON.parse(ev.data as string);
-          const k = msg?.k;
-          if (!k) return;
+        ws.onopen = () => {
+          if (!cancelled) setWsState("open");
+        };
+        ws.onclose = () => {
+          if (!cancelled) setWsState("closed");
+        };
+        ws.onerror = () => {
+          if (!cancelled) setWsState("closed");
+        };
+        ws.onmessage = (ev) => {
+          if (cancelled || !candleSeriesRef.current) return;
+          try {
+            const msg = JSON.parse(ev.data as string);
+            const k = msg?.k;
+            if (!k) return;
 
-          const candle: ChartCandle = {
-            time: Math.floor(k.t / 1000),
-            open: +k.o,
-            high: +k.h,
-            low: +k.l,
-            close: +k.c,
+            applyLiveCandle({
+              time: Math.floor(k.t / 1000),
+              open: +k.o,
+              high: +k.h,
+              low: +k.l,
+              close: +k.c,
+            });
+          } catch {
+            /* ignore malformed tick */
+          }
+        };
+      } else if (exchange === "kraken") {
+        const wsSymbol =
+          (typeof krakenWsMeta.wsSymbol === "string" && krakenWsMeta.wsSymbol) ||
+          symbolToKrakenWsName(symbol);
+        const krakenMinutes =
+          typeof krakenWsMeta.krakenIntervalMinutes === "number"
+            ? krakenWsMeta.krakenIntervalMinutes
+            : null;
+        const wsSupported = krakenWsMeta.wsSupported === true && krakenMinutes != null;
+
+        if (!wsSupported) {
+          startKrakenPolling();
+        } else {
+          const ws = new WebSocket(KRAKEN_WS_V2);
+          wsRef.current = ws;
+          setWsState("connecting");
+
+          ws.onopen = () => {
+            if (cancelled) return;
+            ws.send(krakenOhlcSubscribe(wsSymbol, krakenMinutes!));
+            pingTimer = setInterval(() => {
+              try {
+                if (ws.readyState === WebSocket.OPEN) ws.send(krakenPingMessage());
+              } catch {
+                /* ignore */
+              }
+            }, 50_000);
+            setWsState("open");
           };
 
-          const all = candlesRef.current;
-          const last = all[all.length - 1];
-          if (last && last.time === candle.time) {
-            all[all.length - 1] = candle;
-          } else if (!last || candle.time > last.time) {
-            all.push(candle);
-            if (all.length > 300) all.shift();
-          }
+          ws.onclose = () => {
+            if (cancelled) return;
+            setWsState("closed");
+            startKrakenPolling();
+          };
 
-          candleSeriesRef.current.update({
-            time: candle.time as never,
-            open: candle.open,
-            high: candle.high,
-            low: candle.low,
-            close: candle.close,
-          });
+          ws.onerror = () => {
+            if (!cancelled) setWsState("closed");
+          };
 
-          applyIndicatorOverlays(
-            all,
-            interval,
-            indicatorsRef.current,
-            candleSeriesRef.current,
-            overlaySeriesRef.current,
-            fibLineRefsRef.current,
-            LineStyle
-          );
-
-          setLivePrice(candle.close);
-        } catch {
-          /* ignore malformed tick */
+          ws.onmessage = (ev) => {
+            if (cancelled || !candleSeriesRef.current) return;
+            const ticks = parseKrakenOhlcV2Message(ev.data as string);
+            applyLiveCandles(ticks);
+          };
         }
-      };
+      } else {
+        setWsState("closed");
+      }
 
       resizeHandler = () => {
         if (!isActive() || !chart || !ref.current) return;
@@ -400,6 +588,8 @@ export function MiniCandles({
 
     return () => {
       cancelled = true;
+      if (pingTimer) clearInterval(pingTimer);
+      if (pollTimer) clearInterval(pollTimer);
       try {
         wsRef.current?.close();
       } catch {
@@ -413,7 +603,7 @@ export function MiniCandles({
       tradePriceLineRefs.current = [];
       fibLineRefsRef.current = [];
     };
-  }, [symbol, testnet, interval, indicatorsKey, layout]);
+  }, [symbol, testnet, exchange, interval, indicatorsKey, layout]);
 
   useEffect(() => {
     const series = candleSeriesRef.current;
@@ -464,7 +654,8 @@ export function MiniCandles({
           className="absolute inset-0 z-10 flex items-center justify-center text-[10px] mono text-danger/90 bg-surface/60 rounded-lg px-3 text-center"
           style={{ minHeight: layout.totalHeight }}
         >
-          Chart unavailable ({testnet ? "testnet" : "live"} · {symbol})
+          Chart unavailable (
+          {exchange === "kraken" ? "Kraken" : testnet ? "testnet" : "live"} · {symbol})
         </div>
       )}
       <div ref={ref} className="w-full" style={{ minHeight: layout.totalHeight }} />

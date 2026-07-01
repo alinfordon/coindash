@@ -9,50 +9,119 @@ export type PiataRow = {
   quoteVolume24h: number;
   high24h: number;
   low24h: number;
+  assetClass?: "crypto" | "tokenized_asset";
 };
 
-const STABLE_USDC = /^(USDT|USDC|BUSD|TUSD|FDUSD|DAI|USDP|PYUSD|USDE|EUR|TRY|GBP)USDC$/i;
+const STABLE_QUOTE_PAIR =
+  /^(USDT|USDC|BUSD|TUSD|FDUSD|DAI|USDP|PYUSD|USDE|EUR|USD)(USD|USDC|USDT|EUR)$/i;
 
+export function piataBaseAsset(symbol: string): string {
+  const m = symbol.match(/^(.+?)(USD|USDC|USDT|EUR)$/i);
+  return m ? m[1]!.toUpperCase() : symbol.replace(/USDC$/i, "") || symbol;
+}
+
+export function isValidPiataPairSymbol(symbol: string): boolean {
+  return /^[A-Z0-9]{2,}(USD|USDC|USDT|EUR)$/i.test(symbol);
+}
+
+export function filterTradablePairs(
+  tickers: Ticker24h[],
+  tradableSymbols: Set<string>,
+  testnet: boolean,
+  pairBlacklist?: string[] | null,
+  minQuoteVolume?: number
+): Ticker24h[] {
+  const minVol = minQuoteVolume ?? (testnet ? 50_000 : 250_000);
+  return tickers
+    .filter((t) => tradableSymbols.has(t.symbol))
+    .filter((t) => !STABLE_QUOTE_PAIR.test(t.symbol))
+    .filter((t) => !isPairBlacklisted(t.symbol, pairBlacklist))
+    .filter((t) => t.lastPrice >= 0.0001)
+    .filter((t) => t.quoteVolume >= minVol);
+}
+
+/** @deprecated use filterTradablePairs */
 export function filterTradableUsdcPairs(
   tickers: Ticker24h[],
   spotUsdcSymbols: Set<string>,
   testnet: boolean,
   pairBlacklist?: string[] | null
 ): Ticker24h[] {
-  const minQuoteVolume = testnet ? 50_000 : 250_000;
-  return tickers
-    .filter((t) => spotUsdcSymbols.has(t.symbol))
-    .filter((t) => !STABLE_USDC.test(t.symbol))
-    .filter((t) => !isPairBlacklisted(t.symbol, pairBlacklist))
-    .filter((t) => t.lastPrice >= 0.0001)
-    .filter((t) => t.quoteVolume >= minQuoteVolume);
+  return filterTradablePairs(tickers, spotUsdcSymbols, testnet, pairBlacklist);
 }
 
-export function toPiataRow(t: Ticker24h): PiataRow {
-  const base = t.symbol.replace(/USDC$/i, "") || t.symbol;
+export function toPiataRow(t: Ticker24h, assetClass?: "crypto" | "tokenized_asset"): PiataRow {
   return {
     symbol: t.symbol,
-    base,
+    base: piataBaseAsset(t.symbol),
     price: t.lastPrice,
     change24h: t.priceChangePercent,
     quoteVolume24h: t.quoteVolume,
     high24h: t.highPrice,
     low24h: t.lowPrice,
+    assetClass,
   };
 }
 
+export type PiataMarketSections = {
+  trending: PiataRow[];
+  hot: PiataRow[];
+  rising24h: PiataRow[];
+  falling24h: PiataRow[];
+  catalog: PiataRow[];
+  catalogCount: number;
+  btc: { price: number; change24h: number; quoteVolume24h: number } | null;
+};
+
 export function buildSpotUsdcCatalog(
   tickers: Ticker24h[],
-  spotUsdcSymbols: Set<string>,
-  pairBlacklist?: string[] | null
+  tradableSymbols: Set<string>,
+  pairBlacklist?: string[] | null,
+  assetClass?: "crypto" | "tokenized_asset"
 ): PiataRow[] {
   return tickers
-    .filter((t) => spotUsdcSymbols.has(t.symbol))
-    .filter((t) => !STABLE_USDC.test(t.symbol))
+    .filter((t) => tradableSymbols.has(t.symbol))
+    .filter((t) => !STABLE_QUOTE_PAIR.test(t.symbol))
     .filter((t) => !isPairBlacklisted(t.symbol, pairBlacklist))
     .filter((t) => t.lastPrice >= 0.0001)
     .sort((a, b) => b.quoteVolume - a.quoteVolume)
-    .map(toPiataRow);
+    .map((t) => toPiataRow(t, assetClass));
+}
+
+export function buildPiataMarket(
+  tickers: Ticker24h[],
+  tradableSymbols: Set<string>,
+  testnet: boolean,
+  pairBlacklist?: string[] | null,
+  opts?: { minQuoteVolume?: number; assetClass?: "crypto" | "tokenized_asset"; btcSymbol?: string }
+): PiataMarketSections {
+  const sections = buildPiataSections(
+    tickers,
+    tradableSymbols,
+    testnet,
+    pairBlacklist,
+    opts?.minQuoteVolume,
+    opts?.assetClass
+  );
+  const catalog = buildSpotUsdcCatalog(tickers, tradableSymbols, pairBlacklist, opts?.assetClass);
+  const btcSym =
+    opts?.btcSymbol ||
+    [...tradableSymbols].find((s) => s.startsWith("BTC")) ||
+    "BTCUSDC";
+  const btcTicker = tradableSymbols.has(btcSym) ? tickers.find((t) => t.symbol === btcSym) : undefined;
+
+  return {
+    ...sections,
+    catalog,
+    catalogCount: catalog.length,
+    btc: btcTicker
+      ? {
+          price: btcTicker.lastPrice,
+          change24h: btcTicker.priceChangePercent,
+          quoteVolume24h: btcTicker.quoteVolume,
+        }
+      : null,
+  };
 }
 
 /** Match symbol or base asset (e.g. btc, ETHUSDC). */
@@ -66,11 +135,19 @@ export function filterPiataByQuery(rows: PiataRow[], query: string, limit = 50):
 
 export function buildPiataSections(
   tickers: Ticker24h[],
-  spotUsdcSymbols: Set<string>,
+  tradableSymbols: Set<string>,
   testnet: boolean,
-  pairBlacklist?: string[] | null
+  pairBlacklist?: string[] | null,
+  minQuoteVolume?: number,
+  assetClass?: "crypto" | "tokenized_asset"
 ) {
-  const pool = filterTradableUsdcPairs(tickers, spotUsdcSymbols, testnet, pairBlacklist);
+  const pool = filterTradablePairs(
+    tickers,
+    tradableSymbols,
+    testnet,
+    pairBlacklist,
+    minQuoteVolume
+  );
 
   const trending = [...pool].sort((a, b) => b.quoteVolume - a.quoteVolume).slice(0, 15);
 
@@ -90,11 +167,13 @@ export function buildPiataSections(
     .sort((a, b) => b.quoteVolume * (1 + b.priceChangePercent / 100) - a.quoteVolume * (1 + a.priceChangePercent / 100))
     .slice(0, 15);
 
+  const mapRow = (t: Ticker24h) => toPiataRow(t, assetClass);
+
   return {
-    trending: trending.map(toPiataRow),
-    hot: hot.map(toPiataRow),
-    rising24h: rising24h.map(toPiataRow),
-    falling24h: falling24h.map(toPiataRow),
+    trending: trending.map(mapRow),
+    hot: hot.map(mapRow),
+    rising24h: rising24h.map(mapRow),
+    falling24h: falling24h.map(mapRow),
   };
 }
 

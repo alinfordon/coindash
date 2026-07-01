@@ -1,7 +1,7 @@
 import { connectDB } from "./db";
 import { InvestPortfolio } from "@/models/InvestPortfolio";
 import { Trade } from "@/models/Trade";
-import { baseAssetOf, fetchPortfolioValueUsdc } from "./binance";
+import { getExchangeAdapter, getExchangeAdapterForTrade } from "./exchange";
 import { getSettings, syncToEnv, type RuntimeSettings } from "./settings";
 import { callAI, safeParseJson, assertAiReady } from "./ai";
 import { toObjectId } from "./tenant";
@@ -82,11 +82,12 @@ export async function updateInvestPortfolio(
   return doc;
 }
 
-async function tradingQtyByAsset(userId: string): Promise<Map<string, number>> {
+async function tradingQtyByAsset(userId: string, settings: RuntimeSettings): Promise<Map<string, number>> {
   const open = await Trade.find({ userId: toObjectId(userId), status: "OPEN" }).lean();
   const map = new Map<string, number>();
   for (const t of open) {
-    const base = baseAssetOf(String(t.pair || ""));
+    const tex = getExchangeAdapterForTrade(settings, t);
+    const base = tex.baseAssetOf(String(t.pair || ""));
     const qty = +(t.quantity || 0);
     if (qty > 0) map.set(base, (map.get(base) || 0) + qty);
   }
@@ -200,7 +201,7 @@ export async function buildPortfolioSnapshot(
   await connectDB();
   const doc = await getOrCreateInvestPortfolio(userId);
   const targets = normalizeTargets((doc.targets as InvestTarget[]) || DEFAULT_TARGETS);
-  const tradingMap = await tradingQtyByAsset(userId);
+  const tradingMap = await tradingQtyByAsset(userId, settings);
 
   let totalUsdc = 0;
   let tickerOk = false;
@@ -209,12 +210,13 @@ export async function buildPortfolioSnapshot(
 
   try {
     syncToEnv(settings);
-    const pv = await fetchPortfolioValueUsdc(settings.binanceTestnet);
+    const ex = getExchangeAdapter(settings);
+    const pv = await ex.fetchPortfolioValue();
     totalUsdc = pv.total;
     tickerOk = pv.tickerOk;
     assets = pv.assets;
   } catch (e) {
-    portfolioError = e instanceof Error ? e.message.slice(0, 300) : "Eroare Binance";
+    portfolioError = e instanceof Error ? e.message.slice(0, 300) : "Eroare exchange";
     totalUsdc = settings.cashBalanceUsdc || 0;
   }
 

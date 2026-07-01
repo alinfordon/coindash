@@ -5,13 +5,23 @@ import Link from "next/link";
 import { signOut } from "next-auth/react";
 import { Zap, Pause, Cpu, LogOut, User } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { SWR_DASHBOARD_STATS } from "@/lib/swrDefaults";
+import { SWR_DASHBOARD_STATS, SWR_SETTINGS } from "@/lib/swrDefaults";
+import { exchangeLabel, getActiveExchange } from "@/lib/exchanges";
 
 type StatsBrief = { pilotActive: boolean; openPositions: number };
 
 export function TopBar() {
   const { data } = useSWR<StatsBrief>("/api/dashboard/stats", undefined, SWR_DASHBOARD_STATS);
+  const { data: settings } = useSWR<{ activeExchange?: string; binanceTestnet?: boolean }>(
+    "/api/settings",
+    undefined,
+    SWR_SETTINGS
+  );
   const pilot = data?.pilotActive ?? false;
+  const activeEx = getActiveExchange(settings);
+  const exLabel = exchangeLabel(activeEx).toUpperCase();
+  const mode =
+    activeEx === "binance" && settings?.binanceTestnet !== false ? "TESTNET" : "LIVE";
   return (
     <header className="sticky top-0 z-20 h-14 border-b border-border/70 bg-surface/60 backdrop-blur-xl flex items-center justify-between px-4 md:px-6">
       {/* Mobile logo (sidebar is hidden on mobile) */}
@@ -27,7 +37,7 @@ export function TopBar() {
       {/* Desktop status strip */}
       <div className="hidden md:flex items-center gap-3 text-xs mono tracking-widest text-text-muted">
         <span className="text-primary">●</span>
-        <span>LIVE · BINANCE</span>
+        <span>{mode} · {exLabel}</span>
         <span className="text-text-muted/50">|</span>
         <span>{new Date().toLocaleDateString("en-US", { year: "numeric", month: "short", day: "2-digit" })}</span>
       </div>

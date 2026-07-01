@@ -2,19 +2,14 @@ import { Trade } from "@/models/Trade";
 import { AILog } from "@/models/AILog";
 import { type RuntimeSettings, syncCashBalanceFromBinance } from "./settings";
 import { toObjectId } from "./tenant";
-import {
-  fetchPrice,
-  marketBuyQuote,
-  marketSell,
-  placeOco,
-  cancelOco,
-  getSymbolInfo,
-  floorToStep,
-  fetchFreeBalance,
-  baseAssetOf,
-} from "./binance";
+import { resolveActiveExchange } from "./exchanges";
+import { getExchangeAdapter, getExchangeAdapterForTrade } from "./exchange";
+import { tradeExitBundle } from "./exchange/exitOrders";
+import { detectKrakenAssetClass } from "./kraken";
+import { floorToStep } from "./exchange/binanceAdapter";
 import { notifyTelegram } from "./notify";
 import { isPairBlacklisted } from "./pairBlacklist";
+import type { AssetClass } from "./exchange/types";
 
 export type OpenParams = {
   userId: string;
@@ -23,8 +18,8 @@ export type OpenParams = {
   entryHint?: number;
   stopLossPct?: number;
   takeProfitPct?: number;
-  /** When false, only MARKET buy — no OCO / SL/TP on exchange or in trade record. */
   withSlTp?: boolean;
+  assetClass?: AssetClass;
   aiProvider: string;
   aiModel: string;
   aiConfidence: number;
@@ -34,20 +29,24 @@ export type OpenParams = {
 };
 
 export async function openPosition(p: OpenParams) {
-  const testnet = p.settings.binanceTestnet;
+  const ex = getExchangeAdapter(p.settings);
+  const exchange = resolveActiveExchange(p.settings);
+  const assetClass: AssetClass =
+    p.assetClass ??
+    (exchange === "kraken"
+      ? detectKrakenAssetClass(p.pair, p.settings.krakenMarkets || "both")
+      : "crypto");
 
   if (isPairBlacklisted(p.pair, p.settings.pairBlacklist)) {
     throw new Error(`${p.pair} is excluded (pair blacklist in Settings)`);
   }
 
-  // Resolve current price + symbol filters first
   const [marketPrice, info] = await Promise.all([
-    p.entryHint ? Promise.resolve(p.entryHint) : fetchPrice(p.pair, testnet),
-    getSymbolInfo(p.pair, testnet).catch(() => null),
+    p.entryHint ? Promise.resolve(p.entryHint) : ex.fetchPrice(p.pair, assetClass),
+    ex.getSymbolInfo(p.pair, assetClass).catch(() => null),
   ]);
   const price = marketPrice;
 
-  // Pre-flight checks: minNotional
   if (info && p.usdcValue < info.minNotional) {
     throw new Error(`${p.pair}: order size $${p.usdcValue} < minNotional $${info.minNotional}`);
   }
@@ -65,57 +64,38 @@ export async function openPosition(p: OpenParams) {
   const slPct = p.stopLossPct ?? p.settings.stopLossPercent;
   const tpPct = p.takeProfitPct ?? p.settings.takeProfitPercent;
 
-  let buyOrder: any = null;
-  let oco: any = null;
+  let buyOrderId = "";
+  let ocoOrderId = "";
+  let exitOrderIds: string[] = [];
   let ocoError: string | null = null;
   let entryPriceActual = price;
-
   let netQty = quantity;
 
   if (!p.settings.dryRun) {
-    buyOrder = await marketBuyQuote(p.pair, p.usdcValue, testnet);
-    // Use real executed avg price + NET qty (after commission paid in base asset) from fills
-    const fills = buyOrder?.fills as any[] | undefined;
-    const baseAsset = baseAssetOf(p.pair);
-    if (fills?.length) {
-      const agg = fills.reduce(
-        (a, f) => {
-          const q = +f.qty;
-          const px = +f.price;
-          const commission = +f.commission || 0;
-          const commissionAsset = String(f.commissionAsset || "");
-          const feeInBase = commissionAsset === baseAsset ? commission : 0;
-          return {
-            qty: a.qty + q,
-            netQty: a.netQty + (q - feeInBase),
-            notional: a.notional + q * px,
-          };
-        },
-        { qty: 0, netQty: 0, notional: 0 }
-      );
-      if (agg.qty > 0) entryPriceActual = agg.notional / agg.qty;
-      if (agg.netQty > 0) netQty = agg.netQty;
-    } else if (buyOrder?.executedQty) {
-      netQty = +buyOrder.executedQty;
-    }
+    const buy = await ex.marketBuyQuote(p.pair, p.usdcValue, assetClass);
+    buyOrderId = buy.orderId;
+    entryPriceActual = buy.entryPrice || price;
+    netQty = buy.executedQty || quantity;
 
-    // Floor to step for exchange compliance
     const finalQty = info ? floorToStep(netQty, info.stepSize) : +netQty.toFixed(6);
     netQty = finalQty;
 
     try {
       if (withSlTp) {
-        oco = await placeOco(
+        const exits = await ex.placeExitOrders(
           p.pair,
           finalQty,
           entryPriceActual * (1 + tpPct / 100),
           entryPriceActual * (1 - slPct / 100),
-          testnet
+          assetClass
         );
+        if (exits.error) ocoError = exits.error;
+        if (exits.bundle.kind === "oco") ocoOrderId = exits.bundle.ocoOrderId;
+        if (exits.bundle.kind === "dual") exitOrderIds = exits.bundle.orderIds;
       }
     } catch (e: any) {
       ocoError = e.message?.slice(0, 300) || String(e);
-      console.error(`[OCO FAIL] ${p.pair}: ${ocoError}`);
+      console.error(`[EXIT ORDERS FAIL] ${p.pair}: ${ocoError}`);
       await AILog.create({
         userId: toObjectId(p.userId),
         action: "ERROR",
@@ -127,6 +107,7 @@ export async function openPosition(p: OpenParams) {
           qty: finalQty,
           sl: entryPriceActual * (1 - slPct / 100),
           tp: entryPriceActual * (1 + tpPct / 100),
+          exchange,
         },
       });
     }
@@ -145,8 +126,11 @@ export async function openPosition(p: OpenParams) {
     usdcValue: p.usdcValue,
     stopLoss: finalStopLoss,
     takeProfit: finalTakeProfit,
-    binanceOrderId: buyOrder?.orderId?.toString() || "",
-    ocoOrderId: oco?.orderListId?.toString() || "",
+    binanceOrderId: buyOrderId,
+    ocoOrderId,
+    exitOrderIds,
+    exchange,
+    assetClass,
     openedAt: new Date(),
     aiProvider: p.aiProvider,
     aiModel: p.aiModel,
@@ -156,6 +140,8 @@ export async function openPosition(p: OpenParams) {
       ...(p.indicators || {}),
       withSlTp,
       ocoError: ocoError || undefined,
+      exchange,
+      assetClass,
     },
     dryRun: p.settings.dryRun,
   });
@@ -177,12 +163,11 @@ export async function openPosition(p: OpenParams) {
     : "\nFără SL/TP (doar MARKET)";
 
   await notifyTelegram(
-    `🟢 <b>OPEN ${p.pair}</b>\nEntry: $${entryPriceActual.toFixed(6)}\nSize: $${p.usdcValue}${slTpLine}\nAI: ${p.aiProvider} (${p.aiConfidence}%)${ocoError ? "\n⚠️ OCO failed — monitoring via cron" : ""}${p.settings.dryRun ? "\n<i>[Dry Run]</i>" : ""}`
+    `🟢 <b>OPEN ${p.pair}</b> (${exchange})\nEntry: $${entryPriceActual.toFixed(6)}\nSize: $${p.usdcValue}${slTpLine}\nAI: ${p.aiProvider} (${p.aiConfidence}%)${ocoError ? "\n⚠️ Exit orders failed — monitoring via cron" : ""}${p.settings.dryRun ? "\n<i>[Dry Run]</i>" : ""}`
   );
 
-  // Refresh cached USDC cash snapshot so the dashboard reflects the spent amount.
   if (!p.settings.dryRun) {
-    await syncCashBalanceFromBinance(p.userId, p.settings.binanceTestnet);
+    await syncCashBalanceFromBinance(p.userId);
   }
 
   return trade;
@@ -196,34 +181,30 @@ export async function closePosition(
 ) {
   const trade = await Trade.findOne({ _id: tradeId, userId: toObjectId(userId) });
   if (!trade || trade.status !== "OPEN") throw new Error("Trade not open");
-  const price = await fetchPrice(trade.pair, settings.binanceTestnet);
+
+  const ex = getExchangeAdapterForTrade(settings, trade);
+  const assetClass = (trade.assetClass as AssetClass) || "crypto";
+  const price = await ex.fetchPrice(trade.pair as string, assetClass);
 
   let sellNote: string | null = null;
 
   if (!settings.dryRun && !trade.dryRun) {
-    const testnet = settings.binanceTestnet;
+    const bundle = tradeExitBundle(trade);
 
-    // 1) Cancel OCO to release the locked balance
-    if (trade.ocoOrderId) {
+    if (bundle) {
       try {
-        await cancelOco(trade.pair, trade.ocoOrderId, testnet);
+        await ex.cancelExitOrders(trade.pair as string, bundle, assetClass);
       } catch (e: any) {
-        // If OCO was already filled/cancelled (e.g. TP/SL just hit), this is fine — continue.
-        console.warn("cancelOco failed:", e?.message || e);
+        console.warn("cancelExitOrders failed:", e?.message || e);
       }
-      // Give Binance a beat to release reserved funds before re-selling
       await new Promise((r) => setTimeout(r, 600));
     }
 
-    // 2) Figure out how much we can actually sell right now
     try {
-      const base = baseAssetOf(trade.pair);
-      const info = await getSymbolInfo(trade.pair, testnet).catch(() => null);
-      const free = await fetchFreeBalance(base, testnet);
+      const base = ex.baseAssetOf(trade.pair as string);
+      const info = await ex.getSymbolInfo(trade.pair as string, assetClass).catch(() => null);
+      const free = await ex.fetchFreeBalance(base);
       const wanted = trade.quantity as number;
-
-      // Use min of requested and free, floored to step size; Binance fee was already subtracted on buy
-      // but OCO stop-limit partial fills / rounding can leave marginally less.
       const rawQty = Math.min(wanted, free);
       const qtyToSell = info ? floorToStep(rawQty, info.stepSize) : +rawQty.toFixed(6);
 
@@ -235,8 +216,7 @@ export async function closePosition(
         console.warn(`[closePosition] ${trade.pair}: ${sellNote}`);
       } else {
         try {
-          await marketSell(trade.pair, qtyToSell, testnet);
-          // Record the actually-sold qty on the trade for accurate PnL downstream
+          await ex.marketSell(trade.pair as string, qtyToSell, assetClass);
           trade.quantity = qtyToSell;
         } catch (e: any) {
           sellNote = `marketSell failed: ${e?.message?.slice(0, 200) || e}`;
@@ -278,9 +258,8 @@ export async function closePosition(
     `${pnlUsdc >= 0 ? "✅" : "❌"} <b>CLOSE ${trade.pair}</b> (${reason})\nExit: $${price}\nP&L: ${pnlPercent}% ($${pnlUsdc})${sellNote ? `\n⚠️ ${sellNote}` : ""}`
   );
 
-  // Refresh cached USDC cash snapshot so the dashboard reflects the proceeds.
   if (!settings.dryRun && !trade.dryRun) {
-    await syncCashBalanceFromBinance(userId, settings.binanceTestnet);
+    await syncCashBalanceFromBinance(userId);
   }
 
   return trade;

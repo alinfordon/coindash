@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/db";
 import { Trade } from "@/models/Trade";
 import { getSettings } from "@/lib/settings";
-import { fetchPrice } from "@/lib/binance";
+import { getExchangeAdapterForTrade } from "@/lib/exchange";
 import { userScope } from "@/lib/tenant";
 import { getApiUserId, apiError } from "@/lib/apiUser";
 
@@ -18,7 +18,8 @@ export async function GET() {
   for (const t of trades) {
     let price = t.entryPrice as number;
     try {
-      price = await fetchPrice(t.pair as string, settings.binanceTestnet);
+      const tex = getExchangeAdapterForTrade(settings, t);
+      price = await tex.fetchPrice(t.pair as string, (t.assetClass as any) || "crypto");
     } catch {
       /* use last-known entry */
     }

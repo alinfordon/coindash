@@ -9,9 +9,19 @@ type Props = {
   catalog: PiataRow[];
   onBuy: (row: PiataRow) => void;
   onSearchActiveChange?: (active: boolean) => void;
+  searchPlaceholder?: string;
+  catalogHint?: string;
+  volumeLabel?: string;
 };
 
-export function PiataPairSearch({ catalog, onBuy, onSearchActiveChange }: Props) {
+export function PiataPairSearch({
+  catalog,
+  onBuy,
+  onSearchActiveChange,
+  searchPlaceholder = "Caută pereche SPOT USDC (ex. BTC, SOL, ETHUSDC…)",
+  catalogHint,
+  volumeLabel = "Vol USDC",
+}: Props) {
   const [query, setQuery] = useState("");
 
   const results = useMemo(() => filterPiataByQuery(catalog, query), [catalog, query]);
@@ -29,9 +39,9 @@ export function PiataPairSearch({ catalog, onBuy, onSearchActiveChange }: Props)
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Caută pereche SPOT USDC (ex. BTC, SOL, ETHUSDC…)"
+          placeholder={searchPlaceholder}
           className="w-full rounded-xl border border-border/70 bg-surface-2/50 pl-10 pr-10 py-2.5 text-sm mono text-text-primary placeholder:text-text-muted/70 focus:outline-none focus:border-primary/50"
-          aria-label="Caută pereche SPOT USDC"
+          aria-label={searchPlaceholder}
         />
         {query && (
           <button
@@ -47,7 +57,7 @@ export function PiataPairSearch({ catalog, onBuy, onSearchActiveChange }: Props)
 
       {!searching && catalog.length > 0 && (
         <p className="text-[10px] mono text-text-muted">
-          {catalog.length} perechi SPOT USDC tranzacționabile · sortate după volum 24h
+          {catalogHint ?? `${catalog.length} perechi · sortate după volum 24h`}
         </p>
       )}
 
@@ -62,7 +72,8 @@ export function PiataPairSearch({ catalog, onBuy, onSearchActiveChange }: Props)
           icon={Search}
           accent="primary"
           rows={results}
-          emptyLabel="Nicio pereche găsită. Încearcă ticker-ul (BTC) sau perechea completă (BTCUSDC)."
+          emptyLabel="Nicio pereche găsită. Încearcă ticker-ul sau perechea completă."
+          volumeLabel={volumeLabel}
           onBuy={onBuy}
         />
       )}

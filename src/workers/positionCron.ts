@@ -1,6 +1,8 @@
 import { connectDB } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
-import { fetchCandles, fetchPrice, getOcoOrderList } from "@/lib/binance";
+import { getExchangeAdapter, getExchangeAdapterForTrade } from "@/lib/exchange";
+import { tradeExitBundle } from "@/lib/exchange/exitOrders";
+import type { AssetClass } from "@/lib/exchange/types";
 import { computeIndicatorSnapshot } from "@/lib/indicators";
 import { buildPositionCheckPrompt, callAI, safeParseJson } from "@/lib/ai";
 import { Trade } from "@/models/Trade";
@@ -59,23 +61,26 @@ async function runPositionCronForUser(userId: string, opts: { manual?: boolean }
   for (const t of trades) {
     if (t.dryRun) continue;
     try {
-      const price = await fetchPrice(t.pair as string, settings.binanceTestnet);
+      const tex = getExchangeAdapterForTrade(settings, t);
+      const assetClass = (t.assetClass as AssetClass) || "crypto";
+      const price = await tex.fetchPrice(t.pair as string, assetClass);
       const entry = t.entryPrice as number;
       const qty = t.quantity as number;
       const pnlUsdc = (price - entry) * qty;
       const pnlPct = ((price - entry) / entry) * 100;
 
-      let ocoExecuting = false;
-      if (t.ocoOrderId) {
+      let exitExecuting = false;
+      const bundle = tradeExitBundle(t);
+      if (bundle) {
         try {
-          const list = await getOcoOrderList(t.pair as string, t.ocoOrderId as string, settings.binanceTestnet);
-          if (list.listOrderStatus === "EXECUTING") ocoExecuting = true;
+          const state = await tex.queryExitState(t.pair as string, bundle, assetClass);
+          if (state === "EXECUTING") exitExecuting = true;
         } catch {
-          /* OCO may be purged; fall through to mark-based checks */
+          /* fall through */
         }
       }
 
-      if (!ocoExecuting) {
+      if (!exitExecuting) {
         if (t.takeProfit && price >= (t.takeProfit as number)) {
           await closePosition(String(t._id), userId, "TP_HIT", settings);
           closed.push({ pair: t.pair, reason: "TP_HIT" });
@@ -88,7 +93,7 @@ async function runPositionCronForUser(userId: string, opts: { manual?: boolean }
         }
       }
 
-      const candles = await fetchCandles(t.pair as string, entryInterval, 50, settings.binanceTestnet);
+      const candles = await tex.fetchCandles(t.pair as string, entryInterval, 50, assetClass);
       const snap = computeIndicatorSnapshot(candles.map((c) => c.close));
       const durationMin = Math.floor((Date.now() - new Date(t.openedAt as Date).getTime()) / 60000);
 

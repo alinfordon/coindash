@@ -1,6 +1,6 @@
 "use client";
 
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { Stat } from "@/components/ui/Card";
 import { classOfPnl, fmtPct, fmtUsd } from "@/lib/utils";
 import { OpenPositionsTable } from "@/components/dashboard/OpenPositionsTable";
@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { SWR_DASHBOARD_PAGE } from "@/lib/swrDefaults";
 
 export default function DashboardPage() {
+  const { mutate: globalMutate } = useSWRConfig();
   const { data: stats, mutate } = useSWR<any>("/api/dashboard/stats", undefined, SWR_DASHBOARD_PAGE);
 
   async function trigger(path: string, label: string) {
@@ -23,13 +24,25 @@ export default function DashboardPage() {
     try {
       const r = await fetch(path, { method: "POST" });
       const j = await r.json();
+      if (!r.ok || j.ok === false) {
+        toast.error(j.error || `HTTP ${r.status}`, { id: path, duration: 12000 });
+        return;
+      }
       if (path.includes("analysis")) {
-        if (j.error) {
+        void globalMutate("/api/analysis/latest");
+        void globalMutate("/api/analysis/schedule");
+        if (j.skipped) {
+          toast.warning(j.reason || "Analysis skipped", { id: path, duration: 14000 });
+        } else if (j.error) {
           toast.error(j.error, { id: path, duration: 12000 });
+        } else if ((j.analyzed ?? 0) === 0) {
+          toast.warning(j.reason || "0 pairs analyzed — check AI Logs", { id: path, duration: 14000 });
         } else {
-          const summary = j.reason || `Analyzed ${j.analyzed ?? 0}/${j.pairsQueued ?? "?"}, opened ${j.opened ?? 0}`;
+          const summary =
+            j.reason ||
+            `Analyzed ${j.analyzed ?? 0}/${j.pairsQueued ?? "?"}, opened ${j.opened ?? 0}`;
           if ((j.opened ?? 0) > 0) toast.success(summary, { id: path, duration: 8000 });
-          else toast.warning?.(summary, { id: path, duration: 14000 }) ?? toast(summary, { id: path, duration: 14000 });
+          else toast.success(summary, { id: path, duration: 10000 });
         }
       } else {
         toast.success(`Checked ${j.checked ?? 0}, closed ${j.closed ?? 0}`, { id: path });

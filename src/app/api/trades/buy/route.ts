@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/db";
 import { Trade } from "@/models/Trade";
 import { getSettings } from "@/lib/settings";
-import { fetchUsdcBalance, getSymbolInfo } from "@/lib/binance";
+import { getExchangeAdapter } from "@/lib/exchange";
 import { openPosition } from "@/lib/trading";
 import { resolveAiProfile } from "@/lib/ai";
 import { userScope } from "@/lib/tenant";
@@ -19,6 +19,7 @@ export async function GET(req: Request) {
     await connectDB();
     const userId = await getApiUserId();
     const settings = await getSettings(userId);
+    const ex = getExchangeAdapter(settings);
     const { searchParams } = new URL(req.url);
     const pair = searchParams.get("pair")?.toUpperCase().trim() || "";
 
@@ -26,7 +27,7 @@ export async function GET(req: Request) {
     let freeUsdcError: string | null = null;
     if (!settings.dryRun) {
       try {
-        freeUsdc = await fetchUsdcBalance(settings.binanceTestnet);
+        freeUsdc = await ex.fetchQuoteBalance();
       } catch (e: any) {
         freeUsdcError = e?.message?.slice(0, 200) || "balance fetch failed";
         freeUsdc = settings.cashBalanceUsdc ?? 0;
@@ -36,7 +37,7 @@ export async function GET(req: Request) {
     let minNotional: number | null = null;
     if (pair) {
       try {
-        const info = await getSymbolInfo(pair, settings.binanceTestnet);
+        const info = await ex.getSymbolInfo(pair);
         minNotional = info.minNotional;
       } catch {
         /* optional */
@@ -54,7 +55,8 @@ export async function GET(req: Request) {
       minNotional,
       alreadyOpen: !!openForPair,
       dryRun: settings.dryRun === true,
-      testnet: settings.binanceTestnet === true,
+      exchange: ex.id,
+      testnet: ex.id === "binance" && settings.binanceTestnet === true,
       maxUsdcPerOrder: settings.maxUsdcPerOrder,
       stopLossPercent: settings.stopLossPercent,
       takeProfitPercent: settings.takeProfitPercent,
@@ -77,6 +79,7 @@ export async function POST(req: Request) {
     await connectDB();
     const userId = await getApiUserId();
     const settings = await getSettings(userId);
+    const ex = getExchangeAdapter(settings);
     const body = await req.json();
 
     const pair = String(body.pair || "")
@@ -90,7 +93,7 @@ export async function POST(req: Request) {
     const aiConfidence = body.aiConfidence != null ? Number(body.aiConfidence) : 0;
     const aiReasoning = String(body.aiReasoning || "Manual buy from Analysis page");
 
-    if (!pair || !pair.endsWith("USDC")) {
+    if (!pair || !/^[A-Z0-9]{2,}(USDC|USDT|USD|EUR)$/i.test(pair)) {
       return NextResponse.json({ ok: false, error: "Invalid pair" }, { status: 400 });
     }
     if (!Number.isFinite(usdcValue) || usdcValue < 10) {
@@ -119,7 +122,7 @@ export async function POST(req: Request) {
     }
 
     if (!settings.dryRun) {
-      const freeUsdc = await fetchUsdcBalance(settings.binanceTestnet);
+      const freeUsdc = await ex.fetchQuoteBalance();
       if (freeUsdc + 1e-6 < usdcValue) {
         return NextResponse.json(
           { ok: false, error: `Insufficient USDC (free ${freeUsdc.toFixed(2)}, need ${usdcValue.toFixed(2)})` },
@@ -129,7 +132,7 @@ export async function POST(req: Request) {
     }
 
     try {
-      const info = await getSymbolInfo(pair, settings.binanceTestnet);
+        const info = await ex.getSymbolInfo(pair);
       if (usdcValue < info.minNotional) {
         return NextResponse.json(
           { ok: false, error: `Order size $${usdcValue} below min notional $${info.minNotional}` },

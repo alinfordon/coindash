@@ -22,6 +22,12 @@ const SettingsSchema = new Schema(
     binanceApiKey: { type: String, default: "" },
     binanceApiSecret: { type: String, default: "" },
     binanceTestnet: { type: Boolean, default: true },
+    /** Active spot exchange — only one at a time (binance | kraken). */
+    activeExchange: { type: String, enum: ["binance", "kraken"], default: "binance" },
+    krakenApiKey: { type: String, default: "" },
+    krakenApiSecret: { type: String, default: "" },
+    /** Kraken scan scope: crypto spot, xStocks (tokenized equities), or both. */
+    krakenMarkets: { type: String, enum: ["crypto", "stocks", "both"], default: "both" },
     pilotActive: { type: Boolean, default: false },
     positionCheckCronActive: { type: Boolean, default: true },
     analysisCronActive: { type: Boolean, default: true },
