@@ -33,6 +33,9 @@ const settingsFetcher = (url: string) =>
 
 type Preflight = {
   freeUsdc: number | null;
+  quoteCurrency?: string;
+  quoteHold?: number | null;
+  quoteTotal?: number | null;
   freeUsdcError?: string | null;
   minNotional?: number | null;
   alreadyOpen?: boolean;
@@ -181,7 +184,11 @@ export function ManualTradeModal({
   const isDryRun = preflight?.dryRun === true;
   const isTestnet = preflight?.testnet === true;
   const activeExchange = preflight?.exchange === "kraken" ? "kraken" : "binance";
+  const quoteCurrency = preflight?.quoteCurrency ?? "USDC";
   const preflightReady = !loading && preflight != null;
+
+  const formatQuote = (amount: number) =>
+    quoteCurrency === "USDC" || quoteCurrency === "USD" ? fmtUsd(amount) : `${amount.toFixed(2)} ${quoteCurrency}`;
 
   const usdcNum = parseFloat(usdc);
   const slNum = parseFloat(stopLoss);
@@ -333,18 +340,28 @@ export function ManualTradeModal({
                 <div className="rounded-lg border border-border/60 bg-surface-2/30 p-3 flex items-start gap-3 min-h-[88px]">
                   <Wallet className="h-4 w-4 text-primary mt-0.5 shrink-0" />
                   <div className="text-sm space-y-0.5 min-w-0">
-                    <div className="text-text-muted text-[10px] mono uppercase">Capital USDC</div>
+                    <div className="text-text-muted text-[10px] mono uppercase">
+                      Capital {quoteCurrency}
+                      {activeExchange === "kraken" && quoteCurrency !== "USDC" && (
+                        <span className="text-warning"> · Kraken</span>
+                      )}
+                    </div>
                     <div className="mono text-lg text-text-primary">
                       {loading
                         ? "…"
                         : isDryRun
                           ? "∞ (dry run)"
                           : preflight?.freeUsdc != null
-                            ? fmtUsd(preflight.freeUsdc)
+                            ? formatQuote(preflight.freeUsdc)
                             : "—"}
                     </div>
                     {preflight?.freeUsdcError && (
                       <div className="text-[10px] text-warning">{preflight.freeUsdcError}</div>
+                    )}
+                    {preflight?.quoteHold != null && preflight.quoteHold > 0 && (
+                      <div className="text-[10px] text-warning">
+                        {preflight.quoteHold.toFixed(2)} {quoteCurrency} blocat în ordine deschise
+                      </div>
                     )}
                     {refPrice != null && (
                       <div className="text-[10px] mono text-text-muted">Preț: {fmtUsd(refPrice, 4)}</div>
@@ -353,10 +370,10 @@ export function ManualTradeModal({
                 </div>
 
                 <Field
-                  label="Sumă ordin (USDC)"
+                  label={`Sumă ordin (${quoteCurrency})`}
                   hint={
                     preflight?.minNotional
-                      ? `Min. notional: $${preflight.minNotional}`
+                      ? `Min. notional: ~${preflight.minNotional} ${quoteCurrency}`
                       : "Din setări; editabil."
                   }
                 >

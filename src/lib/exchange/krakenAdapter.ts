@@ -84,7 +84,8 @@ export class KrakenAdapter implements ExchangeAdapter {
     const rows = await getKrakenBalance(this.apiKey, this.apiSecret);
     const hit = rows.find((r) => r.asset === asset);
     const total = hit?.qty ?? 0;
-    return { free: total, locked: 0, total };
+    const free = hit?.available ?? total;
+    return { free, locked: hit?.hold ?? Math.max(0, total - free), total };
   }
 
   async fetchFreeBalance(asset: string) {

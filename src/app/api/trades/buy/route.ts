@@ -7,11 +7,40 @@ import { openPosition } from "@/lib/trading";
 import { resolveAiProfile } from "@/lib/ai";
 import { userScope } from "@/lib/tenant";
 import { getApiUserId, apiError } from "@/lib/apiUser";
+import {
+  detectKrakenAssetClass,
+  fetchKrakenQuoteBalanceForPair,
+  isKrakenUsdQuoteSymbol,
+  krakenBaseAsset,
+  krakenBuyFeeBuffer,
+  type KrakenQuoteAsset,
+} from "@/lib/kraken";
+import type { KrakenMarketScope } from "@/lib/exchange/types";
 
 export const dynamic = "force-dynamic";
 
 function effectiveTakeProfitPct(sl: number, tp: number, rr: number): number {
   return Math.max(tp, sl * rr);
+}
+
+async function quoteBalanceForPair(
+  ex: ReturnType<typeof getExchangeAdapter>,
+  settings: Awaited<ReturnType<typeof getSettings>>,
+  pair: string
+): Promise<{ free: number; quote: KrakenQuoteAsset | "USDC"; hold?: number; total?: number }> {
+  if (ex.id === "kraken" && pair) {
+    const scope = (settings.krakenMarkets || "both") as KrakenMarketScope;
+    const assetClass = detectKrakenAssetClass(pair, scope);
+    const bal = await fetchKrakenQuoteBalanceForPair(
+      settings.krakenApiKey,
+      settings.krakenApiSecret,
+      pair,
+      scope,
+      assetClass
+    );
+    return { free: bal.available, quote: bal.quote, hold: bal.hold, total: bal.total };
+  }
+  return { free: await ex.fetchQuoteBalance(), quote: "USDC" };
 }
 
 export async function GET(req: Request) {
@@ -25,9 +54,20 @@ export async function GET(req: Request) {
 
     let freeUsdc: number | null = null;
     let freeUsdcError: string | null = null;
+    let quoteCurrency: KrakenQuoteAsset | "USDC" = "USDC";
+    let quoteHold: number | null = null;
+    let quoteTotal: number | null = null;
     if (!settings.dryRun) {
       try {
-        freeUsdc = await ex.fetchQuoteBalance();
+        if (pair) {
+          const qb = await quoteBalanceForPair(ex, settings, pair);
+          freeUsdc = qb.free;
+          quoteCurrency = qb.quote;
+          quoteHold = qb.hold ?? null;
+          quoteTotal = qb.total ?? null;
+        } else {
+          freeUsdc = await ex.fetchQuoteBalance();
+        }
       } catch (e: any) {
         freeUsdcError = e?.message?.slice(0, 200) || "balance fetch failed";
         freeUsdc = settings.cashBalanceUsdc ?? 0;
@@ -51,6 +91,9 @@ export async function GET(req: Request) {
     return NextResponse.json({
       ok: true,
       freeUsdc,
+      quoteCurrency,
+      quoteHold,
+      quoteTotal,
       freeUsdcError,
       minNotional,
       alreadyOpen: !!openForPair,
@@ -96,6 +139,16 @@ export async function POST(req: Request) {
     if (!pair || !/^[A-Z0-9]{2,}(USDC|USDT|USD|EUR)$/i.test(pair)) {
       return NextResponse.json({ ok: false, error: "Invalid pair" }, { status: 400 });
     }
+    if (ex.id === "kraken" && !isKrakenUsdQuoteSymbol(pair)) {
+      const alt = `${krakenBaseAsset(pair)}USD`;
+      return NextResponse.json(
+        {
+          ok: false,
+          error: `Pereche EUR (${pair}) — rămâi pe USD. Folosește ${alt} sau altă pereche *USD/*USDC.`,
+        },
+        { status: 400 }
+      );
+    }
     if (!Number.isFinite(usdcValue) || usdcValue < 10) {
       return NextResponse.json({ ok: false, error: "USDC amount must be at least 10" }, { status: 400 });
     }
@@ -122,10 +175,20 @@ export async function POST(req: Request) {
     }
 
     if (!settings.dryRun) {
-      const freeUsdc = await ex.fetchQuoteBalance();
-      if (freeUsdc + 1e-6 < usdcValue) {
+      const { free: freeQuote, quote, hold, total } = await quoteBalanceForPair(ex, settings, pair);
+      const buffer = ex.id === "kraken" ? krakenBuyFeeBuffer(usdcValue) : 0;
+      if (freeQuote + 1e-6 < usdcValue + buffer) {
+        const holdNote =
+          ex.id === "kraken" && (hold ?? 0) > 0
+            ? ` ${hold!.toFixed(2)} ${quote} blocat în ordine deschise pe Kraken — anulează-le sau reduce suma.`
+            : ex.id === "kraken" && quote === "USD" && (total ?? 0) > freeQuote
+              ? " Verifică dacă ai USDC în loc de USD (solduri separate pe Kraken)."
+              : "";
         return NextResponse.json(
-          { ok: false, error: `Insufficient USDC (free ${freeUsdc.toFixed(2)}, need ${usdcValue.toFixed(2)})` },
+          {
+            ok: false,
+            error: `Insufficient ${quote} (available ${freeQuote.toFixed(2)}, need ~${usdcValue.toFixed(2)}${buffer ? ` + ${buffer.toFixed(2)} fees` : ""}).${holdNote}`,
+          },
           { status: 400 }
         );
       }
@@ -179,7 +242,11 @@ export async function POST(req: Request) {
       takeProfitPercentUsed: tpEffective ?? null,
     });
   } catch (e: any) {
-    const msg = e?.message || "Order failed";
+    let msg = e?.message || "Order failed";
+    if (/EOrder:Insufficient funds/i.test(msg)) {
+      msg =
+        "Kraken: fonduri insuficiente. Verifică soldul USD disponibil (nu total), ordine deschise care blochează fonduri, și că nu ai doar USDC pentru o pereche *USD.";
+    }
     return NextResponse.json({ ok: false, error: msg }, { status: 400 });
   }
 }

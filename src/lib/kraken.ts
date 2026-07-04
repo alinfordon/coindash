@@ -8,6 +8,9 @@ const KRAKEN_API = "https://api.kraken.com";
 export type KrakenBalanceRow = {
   asset: string;
   qty: number;
+  /** Spendable after open-order holds (BalanceEx). */
+  available?: number;
+  hold?: number;
 };
 
 export type KrakenPairMeta = {
@@ -50,6 +53,8 @@ export function normalizeKrakenAsset(code: string): string {
     ETH: "ETH",
     ZUSD: "USD",
     USD: "USD",
+    ZEUR: "EUR",
+    EUR: "EUR",
     USDC: "USDC",
     USDT: "USDT",
     SOL: "SOL",
@@ -188,17 +193,120 @@ export function krakenBaseAsset(symbol: string): string {
 }
 
 export async function getKrakenBalance(apiKey: string, apiSecret: string): Promise<KrakenBalanceRow[]> {
-  const raw = await privatePost<Record<string, string>>("/0/private/Balance", {}, apiKey, apiSecret);
-  return Object.entries(raw || {})
-    .map(([asset, qty]) => ({ asset: normalizeKrakenAsset(asset), qty: +qty || 0 }))
-    .filter((r) => r.qty > 0);
+  try {
+    const raw = await privatePost<
+      Record<string, { balance: string; credit?: string; credit_used?: string; hold_trade?: string }>
+    >("/0/private/BalanceEx", {}, apiKey, apiSecret);
+    return Object.entries(raw || {})
+      .map(([code, row]) => {
+        const qty = +row.balance || 0;
+        const credit = +row.credit || 0;
+        const creditUsed = +row.credit_used || 0;
+        const hold = +row.hold_trade || 0;
+        const available = Math.max(0, qty + credit - creditUsed - hold);
+        return { asset: normalizeKrakenAsset(code), qty, available, hold };
+      })
+      .filter((r) => r.qty > 0 || (r.available ?? 0) > 0);
+  } catch {
+    const raw = await privatePost<Record<string, string>>("/0/private/Balance", {}, apiKey, apiSecret);
+    return Object.entries(raw || {})
+      .map(([asset, qty]) => ({ asset: normalizeKrakenAsset(asset), qty: +qty || 0, available: +qty || 0, hold: 0 }))
+      .filter((r) => r.qty > 0);
+  }
 }
 
 export async function fetchKrakenUsdcBalance(apiKey: string, apiSecret: string): Promise<number> {
   const rows = await getKrakenBalance(apiKey, apiSecret);
   return rows
     .filter((r) => r.asset === "USDC" || r.asset === "USD" || r.asset === "USDT")
-    .reduce((sum, r) => sum + r.qty, 0);
+    .reduce((sum, r) => sum + (r.available ?? r.qty), 0);
+}
+
+const KRAKEN_TAKER_FEE = 0.0026;
+
+export type KrakenQuoteBalance = {
+  quote: KrakenQuoteAsset;
+  /** Total wallet balance. */
+  total: number;
+  /** Blocked by open orders. */
+  hold: number;
+  /** Spendable for new orders. */
+  available: number;
+};
+
+function krakenQuoteRow(rows: KrakenBalanceRow[], quote: KrakenQuoteAsset): KrakenBalanceRow | undefined {
+  return rows.find((r) => r.asset === quote);
+}
+
+export async function fetchKrakenQuoteBalanceDetail(
+  apiKey: string,
+  apiSecret: string,
+  quote: KrakenQuoteAsset
+): Promise<KrakenQuoteBalance> {
+  const rows = await getKrakenBalance(apiKey, apiSecret);
+  const row = krakenQuoteRow(rows, quote);
+  const total = row?.qty ?? 0;
+  const hold = row?.hold ?? 0;
+  const available = row?.available ?? total;
+  return { quote, total, hold, available };
+}
+
+export type KrakenQuoteAsset = "USD" | "USDC" | "USDT" | "EUR";
+
+export function krakenQuoteAssetFromSymbol(symbol: string): KrakenQuoteAsset {
+  const m = symbol.toUpperCase().match(/(USDC|USDT|EUR|USD)$/);
+  return (m?.[1] as KrakenQuoteAsset) || "USD";
+}
+
+/** Kraken pairs quoted in USD/USDC/USDT (excludes EUR). */
+export function isKrakenUsdQuoteSymbol(symbol: string): boolean {
+  return krakenQuoteAssetFromSymbol(symbol) !== "EUR";
+}
+
+/** Spendable balance for the pair's quote currency (excludes holds + uses BalanceEx). */
+export async function fetchKrakenQuoteBalance(
+  apiKey: string,
+  apiSecret: string,
+  quote: KrakenQuoteAsset
+): Promise<number> {
+  const detail = await fetchKrakenQuoteBalanceDetail(apiKey, apiSecret, quote);
+  return detail.available;
+}
+
+export async function fetchKrakenQuoteBalanceForPair(
+  apiKey: string,
+  apiSecret: string,
+  symbol: string,
+  scope: KrakenMarketScope,
+  assetClass?: AssetClass
+): Promise<KrakenQuoteBalance> {
+  const meta = await resolveKrakenPair(symbol, scope, assetClass);
+  const quote = meta.quote as KrakenQuoteAsset;
+  return fetchKrakenQuoteBalanceDetail(apiKey, apiSecret, quote);
+}
+
+/** Reserve headroom for Kraken taker fee + rounding on market buys (viqc). */
+export function krakenBuyFeeBuffer(quoteQty: number): number {
+  return Math.max(1, quoteQty * KRAKEN_TAKER_FEE + 0.25);
+}
+
+export function krakenSafeSpendAmount(available: number, quoteQty: number): number {
+  const spend = Math.min(quoteQty, Math.max(0, available - krakenBuyFeeBuffer(quoteQty)));
+  return Math.floor(spend * 100) / 100;
+}
+
+function krakenQuoteMismatchHint(
+  quote: KrakenQuoteAsset,
+  rows: KrakenBalanceRow[],
+  symbol: string
+): string {
+  if (quote !== "USD") return "";
+  const usdc = krakenQuoteRow(rows, "USDC");
+  if ((usdc?.available ?? 0) >= 10) {
+    const base = krakenBaseAsset(symbol);
+    return ` Ai ${(usdc!.available ?? 0).toFixed(2)} USDC disponibil — perechea ${symbol} necesită USD (sau încearcă ${base}USDC dacă există).`;
+  }
+  return "";
 }
 
 export async function testKrakenConnection(apiKey: string, apiSecret: string) {
@@ -293,6 +401,7 @@ export async function krakenTopPairs(
   const all = await krakenFetchAll24h(scope);
   const stables = /^(USDT|USDC|USD|EUR)/i;
   return all
+    .filter((t) => isKrakenUsdQuoteSymbol(t.symbol))
     .filter((t) => !stables.test(t.symbol))
     .filter((t) => t.lastPrice >= 0.001)
     .filter((t) => t.quoteVolume >= minQuoteVolume)
@@ -365,8 +474,26 @@ export async function krakenMarketBuyQuote(
   assetClass?: AssetClass
 ): Promise<{ txid: string[]; executedQty: number; entryPrice: number }> {
   const meta = await resolveKrakenPair(symbol, scope, assetClass);
+  const quote = meta.quote as KrakenQuoteAsset;
   if (quoteQty < meta.minNotional) {
     throw new Error(`Order size $${quoteQty} below minNotional ~$${meta.minNotional} for ${symbol}`);
+  }
+  const rows = await getKrakenBalance(apiKey, apiSecret);
+  const bal = await fetchKrakenQuoteBalanceDetail(apiKey, apiSecret, quote);
+  const { available: freeQuote, hold, total } = bal;
+  const buffer = krakenBuyFeeBuffer(quoteQty);
+  const mismatch = krakenQuoteMismatchHint(quote, rows, symbol);
+  if (freeQuote + 1e-6 < quoteQty + buffer) {
+    const holdNote = hold > 0 ? ` (${hold.toFixed(2)} ${quote} blocat în ordine deschise)` : "";
+    throw new Error(
+      `Insufficient ${quote} on Kraken (available ${freeQuote.toFixed(2)}${holdNote}, total ${total.toFixed(2)}, need ~${quoteQty.toFixed(2)} ${quote} incl. fees).${mismatch}`
+    );
+  }
+  const spend = krakenSafeSpendAmount(freeQuote, quoteQty);
+  if (spend < meta.minNotional) {
+    throw new Error(
+      `Insufficient ${quote} on Kraken after fee buffer (available ${freeQuote.toFixed(2)} ${quote}, min order ~${meta.minNotional} ${quote}).${mismatch}`
+    );
   }
   const res = await privatePost<{ txid?: string[] }>(
     "/0/private/AddOrder",
@@ -374,9 +501,9 @@ export async function krakenMarketBuyQuote(
       pair: meta.krakenPair,
       type: "buy",
       ordertype: "market",
-      volume: quoteQty.toFixed(2),
+      volume: spend.toFixed(2),
       oflags: "viqc",
-      ...assetClassParam(assetClass),
+      ...assetClassParam(meta.assetClass),
     },
     apiKey,
     apiSecret
@@ -386,7 +513,7 @@ export async function krakenMarketBuyQuote(
   await new Promise((r) => setTimeout(r, 800));
   const order = await krakenQueryOrder(apiKey, apiSecret, txid);
   const executedQty = +order.vol_exec || 0;
-  const cost = +order.cost || quoteQty;
+  const cost = +order.cost || spend;
   const entryPrice = executedQty > 0 ? cost / executedQty : await krakenFetchPrice(symbol, scope, assetClass);
   return { txid: res.txid || [txid], executedQty, entryPrice };
 }

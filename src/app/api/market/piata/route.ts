@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getSettings } from "@/lib/settings";
 import { getExchangeAdapter, type ExchangeAdapter } from "@/lib/exchange";
 import { buildPiataMarket, type PiataMarketSections } from "@/lib/marketPiata";
-import { loadKrakenPairs } from "@/lib/kraken";
+import { loadKrakenPairs, isKrakenUsdQuoteSymbol } from "@/lib/kraken";
 import { getApiUserId, apiError } from "@/lib/apiUser";
 
 export const dynamic = "force-dynamic";
@@ -12,6 +12,7 @@ function symbolSetsFromKraken(scope: "crypto" | "stocks" | "both") {
     const crypto = new Set<string>();
     const xstocks = new Set<string>();
     for (const meta of map.values()) {
+      if (!isKrakenUsdQuoteSymbol(meta.symbol)) continue;
       if (meta.assetClass === "tokenized_asset") {
         if (/SPV/i.test(meta.krakenPair)) continue;
         xstocks.add(meta.symbol);
