@@ -7,9 +7,18 @@ import { classOfPnl, fmtDuration, fmtNum, fmtPct, fmtUsd } from "@/lib/utils";
 import { ChevronDown, ChevronRight, X, Check } from "lucide-react";
 import { toast } from "sonner";
 import { PositionChart } from "@/components/positions/PositionChart";
+import { SWR_SETTINGS } from "@/lib/swrDefaults";
+
+function formatEntryFee(fee: number | null | undefined, currency: string | null | undefined): string {
+  if (fee == null || !Number.isFinite(fee) || fee <= 0) return "—";
+  const cur = currency || "USD";
+  if (cur === "USD" || cur === "USDC" || cur === "USDT") return `$${fee.toFixed(4)}`;
+  return `${fee.toFixed(4)} ${cur}`;
+}
 
 export default function PositionsPage() {
   const { data, mutate } = useSWR<{ trades: any[] }>("/api/trades/open");
+  const { data: settingsData } = useSWR<{ binanceTestnet?: boolean }>("/api/settings", undefined, SWR_SETTINGS);
   const trades = data?.trades || [];
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -109,6 +118,9 @@ export default function PositionsPage() {
                     </div>
                     <div className="text-[10px] mono text-text-muted mt-1">
                       {fmtDuration(t.durationMs)} · qty {fmtNum(t.quantity, 6)}
+                      {t.entryFee != null && t.entryFee > 0 && (
+                        <> · fee {formatEntryFee(t.entryFee, t.feeCurrency)}</>
+                      )}
                     </div>
                   </div>
                 </label>
@@ -157,11 +169,15 @@ export default function PositionsPage() {
                 <div className="mt-3 space-y-3 border-t border-border/50 pt-3 animate-fadeUp">
                   <PositionChart
                     symbol={t.pair}
+                    exchange={t.exchange === "kraken" ? "kraken" : "binance"}
+                    assetClass={t.assetClass === "tokenized_asset" ? "tokenized_asset" : "crypto"}
+                    testnet={settingsData?.binanceTestnet === true}
                     entryPrice={t.entryPrice}
                     stopLoss={t.stopLoss}
                     takeProfit={t.takeProfit}
                     quantity={t.quantity}
-                    height={280}
+                    entryFee={t.entryFee}
+                    feeCurrency={t.feeCurrency}
                   />
                   <div className="rounded-lg border border-border/50 bg-surface-2/30 p-3 text-xs">
                     <div className="text-[10px] mono uppercase tracking-widest text-text-muted mb-1">
@@ -194,6 +210,7 @@ export default function PositionsPage() {
                 <th className="text-right py-2 px-2">Current</th>
                 <th className="text-right py-2 px-2">P&L %</th>
                 <th className="text-right py-2 px-2">P&L USDC</th>
+                <th className="text-right py-2 px-2">Fee</th>
                 <th className="text-right py-2 px-2">Duration</th>
                 <th className="text-right py-2 px-2">Qty</th>
                 <th className="text-right py-2 px-2">Action</th>
@@ -229,6 +246,9 @@ export default function PositionsPage() {
                         {fmtPct(t.pnlPercent)}
                       </td>
                       <td className={`text-right mono py-2 px-2 ${classOfPnl(t.pnlUsdc)}`}>{fmtUsd(t.pnlUsdc)}</td>
+                      <td className="text-right mono text-text-muted py-2 px-2">
+                        {formatEntryFee(t.entryFee, t.feeCurrency)}
+                      </td>
                       <td className="text-right mono text-text-muted py-2 px-2">{fmtDuration(t.durationMs)}</td>
                       <td className="text-right mono py-2 px-2">{fmtNum(t.quantity, 6)}</td>
                       <td className="text-right py-2 px-2">
@@ -245,15 +265,19 @@ export default function PositionsPage() {
                     </tr>
                     {isOpen && (
                       <tr className="border-b border-border/30 bg-surface-2/20">
-                        <td colSpan={9} className="p-4">
+                        <td colSpan={10} className="p-4">
                           <div className="grid xl:grid-cols-[1fr_320px] gap-4">
                             <PositionChart
                               symbol={t.pair}
+                              exchange={t.exchange === "kraken" ? "kraken" : "binance"}
+                              assetClass={t.assetClass === "tokenized_asset" ? "tokenized_asset" : "crypto"}
+                              testnet={settingsData?.binanceTestnet === true}
                               entryPrice={t.entryPrice}
                               stopLoss={t.stopLoss}
                               takeProfit={t.takeProfit}
                               quantity={t.quantity}
-                              height={380}
+                              entryFee={t.entryFee}
+                              feeCurrency={t.feeCurrency}
                             />
                             <div className="space-y-3 text-xs">
                               <div className="rounded-lg border border-border/50 bg-surface-2/40 p-3">

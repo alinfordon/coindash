@@ -40,11 +40,13 @@ type Props = {
   symbol: string;
   testnet?: boolean;
   exchange?: "binance" | "kraken";
+  assetClass?: "crypto" | "tokenized_asset";
   interval?: string;
   title?: string;
   indicators?: AnalysisIndicatorsConfig;
   showIntervalPicker?: boolean;
   priceLines?: ChartPriceLine[];
+  onLivePrice?: (price: number) => void;
 };
 
 function disposeChart(chart: { remove?: () => void } | null) {
@@ -131,11 +133,13 @@ export function MiniCandles({
   symbol,
   testnet = false,
   exchange = "binance",
+  assetClass: assetClassProp,
   interval: intervalProp = "1h",
   title,
   indicators: indicatorsProp,
   showIntervalPicker = false,
   priceLines = [],
+  onLivePrice,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const candleSeriesRef = useRef<any>(null);
@@ -156,6 +160,16 @@ export function MiniCandles({
   useEffect(() => {
     setActiveInterval(normalizeAnalysisInterval(intervalProp, "1h"));
   }, [intervalProp, symbol]);
+
+  const assetClass = assetClassProp ?? (exchange === "kraken" ? guessKrakenAssetClass(symbol) : "crypto");
+
+  const onLivePriceRef = useRef(onLivePrice);
+  onLivePriceRef.current = onLivePrice;
+
+  function publishLivePrice(price: number) {
+    setLivePrice(price);
+    onLivePriceRef.current?.(price);
+  }
 
   const interval = showIntervalPicker ? activeInterval : defaultIv;
 
@@ -234,7 +248,7 @@ export function MiniCandles({
       );
 
       const last = trimmed[trimmed.length - 1];
-      if (last) setLivePrice(last.close);
+      if (last) publishLivePrice(last.close);
     }
 
     function applyLiveCandle(candle: ChartCandle) {
@@ -278,13 +292,12 @@ export function MiniCandles({
         overlayLineStyle
       );
 
-      setLivePrice(normalized.close);
+      publishLivePrice(normalized.close);
     }
 
     async function refreshLatestCandle() {
       if (!isActive()) return;
       try {
-        const assetClass = exchange === "kraken" ? guessKrakenAssetClass(symbol) : "crypto";
         const qs = new URLSearchParams({
           pair: symbol,
           interval,
@@ -424,7 +437,6 @@ export function MiniCandles({
       } = {};
 
       try {
-        const assetClass = exchange === "kraken" ? guessKrakenAssetClass(symbol) : "crypto";
         const qs = new URLSearchParams({
           pair: symbol,
           interval,
@@ -481,7 +493,7 @@ export function MiniCandles({
         if (!isActive()) return;
         chart.timeScale().fitContent();
         const last = candles[candles.length - 1];
-        if (last) setLivePrice(last.close);
+        if (last) publishLivePrice(last.close);
         setStatus("ok");
       } catch {
         if (!cancelled) setStatus("error");

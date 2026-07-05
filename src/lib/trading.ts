@@ -70,12 +70,16 @@ export async function openPosition(p: OpenParams) {
   let ocoError: string | null = null;
   let entryPriceActual = price;
   let netQty = quantity;
+  let entryFee: number | undefined;
+  let feeCurrency: string | undefined;
 
   if (!p.settings.dryRun) {
     const buy = await ex.marketBuyQuote(p.pair, p.usdcValue, assetClass);
     buyOrderId = buy.orderId;
     entryPriceActual = buy.entryPrice || price;
     netQty = buy.executedQty || quantity;
+    entryFee = buy.entryFee;
+    feeCurrency = buy.feeCurrency;
 
     const finalQty = info ? floorToStep(netQty, info.stepSize) : +netQty.toFixed(6);
     netQty = finalQty;
@@ -124,6 +128,9 @@ export async function openPosition(p: OpenParams) {
     entryPrice: entryPriceActual,
     quantity: netQty,
     usdcValue: p.usdcValue,
+    entryFee,
+    feeCurrency,
+    fee: entryFee,
     stopLoss: finalStopLoss,
     takeProfit: finalTakeProfit,
     binanceOrderId: buyOrderId,

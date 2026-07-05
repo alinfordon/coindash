@@ -10,6 +10,11 @@ const TradeSchema = new Schema(
     exitPrice: Number,
     quantity: Number,
     usdcValue: Number,
+    /** Entry commission (exchange-reported). */
+    entryFee: Number,
+    feeCurrency: String,
+    /** Total fees (entry + exit); used by analytics. */
+    fee: Number,
     stopLoss: Number,
     takeProfit: Number,
     binanceOrderId: String,

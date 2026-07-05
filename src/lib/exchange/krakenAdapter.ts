@@ -105,6 +105,8 @@ export class KrakenAdapter implements ExchangeAdapter {
       orderId: res.txid[0] || "",
       executedQty: res.executedQty,
       entryPrice: res.entryPrice,
+      entryFee: res.entryFee,
+      feeCurrency: res.feeCurrency,
     };
   }
 

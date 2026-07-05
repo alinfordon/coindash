@@ -472,7 +472,7 @@ export async function krakenMarketBuyQuote(
   quoteQty: number,
   scope: KrakenMarketScope,
   assetClass?: AssetClass
-): Promise<{ txid: string[]; executedQty: number; entryPrice: number }> {
+): Promise<{ txid: string[]; executedQty: number; entryPrice: number; entryFee: number; feeCurrency: string }> {
   const meta = await resolveKrakenPair(symbol, scope, assetClass);
   const quote = meta.quote as KrakenQuoteAsset;
   if (quoteQty < meta.minNotional) {
@@ -515,7 +515,8 @@ export async function krakenMarketBuyQuote(
   const executedQty = +order.vol_exec || 0;
   const cost = +order.cost || spend;
   const entryPrice = executedQty > 0 ? cost / executedQty : await krakenFetchPrice(symbol, scope, assetClass);
-  return { txid: res.txid || [txid], executedQty, entryPrice };
+  const entryFee = Math.abs(+order.fee || 0);
+  return { txid: res.txid || [txid], executedQty, entryPrice, entryFee, feeCurrency: quote };
 }
 
 export async function krakenMarketSell(
@@ -617,6 +618,16 @@ export async function krakenCancelOrder(
   assetClass?: AssetClass
 ): Promise<void> {
   await privatePost("/0/private/CancelOrder", { txid, ...assetClassParam(assetClass) }, apiKey, apiSecret);
+}
+
+export async function krakenFetchOrderEntryFee(
+  apiKey: string,
+  apiSecret: string,
+  txid: string,
+  quote: KrakenQuoteAsset
+): Promise<{ entryFee: number; feeCurrency: string }> {
+  const order = await krakenQueryOrder(apiKey, apiSecret, txid);
+  return { entryFee: Math.abs(+order.fee || 0), feeCurrency: quote };
 }
 
 async function krakenQueryOrder(apiKey: string, apiSecret: string, txid: string) {

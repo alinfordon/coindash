@@ -95,6 +95,8 @@ export class BinanceAdapter implements ExchangeAdapter {
     const base = baseAssetOf(pair);
     let executedQty = +buyOrder.executedQty || 0;
     let entryPrice = +buyOrder.price || 0;
+    let entryFee = 0;
+    let feeCurrency = "USDC";
     if (fills?.length) {
       const agg = fills.reduce(
         (a, f) => {
@@ -102,17 +104,21 @@ export class BinanceAdapter implements ExchangeAdapter {
           const px = +f.price;
           const fee = +f.commission || 0;
           const feeBase = f.commissionAsset === base ? fee : 0;
-          return { qty: a.qty + q, netQty: a.netQty + (q - feeBase), notional: a.notional + q * px };
+          return { qty: a.qty + q, netQty: a.netQty + (q - feeBase), notional: a.notional + q * px, fee: a.fee + fee };
         },
-        { qty: 0, netQty: 0, notional: 0 }
+        { qty: 0, netQty: 0, notional: 0, fee: 0 }
       );
       if (agg.qty > 0) entryPrice = agg.notional / agg.qty;
       if (agg.netQty > 0) executedQty = agg.netQty;
+      entryFee = agg.fee;
+      feeCurrency = fills[0]?.commissionAsset || "USDC";
     }
     return {
       orderId: buyOrder?.orderId?.toString() || "",
       executedQty,
       entryPrice,
+      entryFee,
+      feeCurrency,
       fills: fills?.map((f) => ({
         qty: +f.qty,
         price: +f.price,

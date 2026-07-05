@@ -1,484 +1,109 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ema, rsi, macd, bollinger } from "@/lib/indicators";
+import { useMemo, useState } from "react";
+import { MiniCandles, type ChartPriceLine } from "@/components/analysis/MiniChart";
 import { classOfPnl, fmtNum, fmtPct } from "@/lib/utils";
-import { Activity, Radio, Wifi, WifiOff } from "lucide-react";
+import type { AnalysisIndicatorsConfig } from "@/lib/analysisIndicators";
 
-type Interval = "1m" | "5m" | "15m" | "1h" | "4h";
-
-type Candle = {
-  time: number; // seconds (UTC)
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
+const POSITION_INDICATORS: AnalysisIndicatorsConfig = {
+  rsi: false,
+  macd: false,
+  ema: true,
+  bollinger: true,
+  fibonacci: false,
+  elliottWave: false,
 };
 
 type Props = {
   symbol: string;
+  exchange?: "binance" | "kraken";
+  assetClass?: "crypto" | "tokenized_asset";
+  testnet?: boolean;
   entryPrice: number;
   stopLoss?: number | null;
   takeProfit?: number | null;
   quantity?: number;
-  height?: number;
+  entryFee?: number | null;
+  feeCurrency?: string | null;
 };
-
-const INTERVALS: Interval[] = ["1m", "5m", "15m", "1h", "4h"];
 
 function isValidPrice(p: unknown): p is number {
   return typeof p === "number" && Number.isFinite(p) && p > 0;
 }
 
+function formatFee(fee: number | null | undefined, currency: string | null | undefined): string {
+  if (fee == null || !Number.isFinite(fee) || fee <= 0) return "—";
+  const cur = currency || "USD";
+  if (cur === "USD" || cur === "USDC" || cur === "USDT") return `$${fee.toFixed(4)}`;
+  return `${fee.toFixed(6)} ${cur}`;
+}
+
 export function PositionChart({
   symbol,
+  exchange = "binance",
+  assetClass = "crypto",
+  testnet = false,
   entryPrice,
   stopLoss,
   takeProfit,
   quantity,
-  height = 360,
+  entryFee,
+  feeCurrency,
 }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<any>(null);
-  const candleSeriesRef = useRef<any>(null);
-  const volSeriesRef = useRef<any>(null);
-  const ema20Ref = useRef<any>(null);
-  const ema50Ref = useRef<any>(null);
-  const bbUpperRef = useRef<any>(null);
-  const bbMidRef = useRef<any>(null);
-  const bbLowerRef = useRef<any>(null);
-  const lineEntryRef = useRef<any>(null);
-  const lineSLRef = useRef<any>(null);
-  const lineTPRef = useRef<any>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-  const candlesRef = useRef<Candle[]>([]);
-
-  const [interval, setInterval] = useState<Interval>("15m");
-  const [wsState, setWsState] = useState<"connecting" | "open" | "closed">("connecting");
   const [livePrice, setLivePrice] = useState<number | null>(null);
-  const [lastUpdate, setLastUpdate] = useState<number>(0);
-  const [snapshot, setSnapshot] = useState<{
-    rsi: number;
-    macdHist: number;
-    ema20: number;
-    ema50: number;
-    bbWidthPct: number;
-  } | null>(null);
 
-  // --- init chart once per symbol/interval ---
-  useEffect(() => {
-    let cancelled = false;
-    let cleanup: (() => void) | undefined;
-
-    async function init() {
-      if (!containerRef.current) return;
-      const { createChart, ColorType, LineStyle, CrosshairMode } = await import("lightweight-charts");
-      if (cancelled || !containerRef.current) return;
-
-      containerRef.current.innerHTML = "";
-      const chart = createChart(containerRef.current, {
-        width: containerRef.current.clientWidth,
-        height,
-        layout: {
-          background: { type: ColorType.Solid, color: "rgba(0,0,0,0)" },
-          textColor: "#5A7A9A",
-          fontFamily: "JetBrains Mono",
-          fontSize: 11,
-        },
-        grid: {
-          horzLines: { color: "rgba(26,42,58,0.35)" },
-          vertLines: { color: "rgba(26,42,58,0.25)" },
-        },
-        timeScale: {
-          borderColor: "#1A2A3A",
-          timeVisible: true,
-          secondsVisible: false,
-        },
-        rightPriceScale: { borderColor: "#1A2A3A", scaleMargins: { top: 0.1, bottom: 0.25 } },
-        crosshair: {
-          mode: CrosshairMode.Normal,
-          vertLine: { color: "#00F5FF55", labelBackgroundColor: "#00F5FF" },
-          horzLine: { color: "#00F5FF55", labelBackgroundColor: "#00F5FF" },
-        },
-      });
-      chartRef.current = chart;
-
-      const candleSeries = chart.addCandlestickSeries({
-        upColor: "#00FF88",
-        downColor: "#FF3366",
-        borderUpColor: "#00FF88",
-        borderDownColor: "#FF3366",
-        wickUpColor: "#00FF88",
-        wickDownColor: "#FF3366",
-      });
-      candleSeriesRef.current = candleSeries;
-
-      const volSeries = chart.addHistogramSeries({
-        priceFormat: { type: "volume" },
-        priceScaleId: "",
-        color: "rgba(0,245,255,0.25)",
-      });
-      // Put volume at bottom
-      (volSeries as any).priceScale?.().applyOptions?.({
-        scaleMargins: { top: 0.85, bottom: 0 },
-      });
-      volSeriesRef.current = volSeries;
-
-      ema20Ref.current = chart.addLineSeries({
-        color: "#FFC857",
-        lineWidth: 1,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false,
-      });
-      ema50Ref.current = chart.addLineSeries({
-        color: "#7B2FFF",
-        lineWidth: 1,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false,
-      });
-      bbUpperRef.current = chart.addLineSeries({
-        color: "rgba(90,122,154,0.55)",
-        lineWidth: 1,
-        lineStyle: LineStyle.Dotted,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false,
-      });
-      bbMidRef.current = chart.addLineSeries({
-        color: "rgba(90,122,154,0.35)",
-        lineWidth: 1,
-        lineStyle: LineStyle.Dotted,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false,
-      });
-      bbLowerRef.current = chart.addLineSeries({
-        color: "rgba(90,122,154,0.55)",
-        lineWidth: 1,
-        lineStyle: LineStyle.Dotted,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false,
-      });
-
-      // Price lines (entry / SL / TP) — SL/TP optional (manual MARKET-only positions)
-      if (isValidPrice(entryPrice)) {
-        lineEntryRef.current = candleSeries.createPriceLine({
-          price: entryPrice,
-          color: "#00F5FF",
-          lineWidth: 2,
-          lineStyle: LineStyle.Dashed,
-          axisLabelVisible: true,
-          title: "ENTRY",
-        });
-      }
-      if (isValidPrice(stopLoss)) {
-        lineSLRef.current = candleSeries.createPriceLine({
-          price: stopLoss,
-          color: "#FF3366",
-          lineWidth: 2,
-          lineStyle: LineStyle.Solid,
-          axisLabelVisible: true,
-          title: "SL",
-        });
-      }
-      if (isValidPrice(takeProfit)) {
-        lineTPRef.current = candleSeries.createPriceLine({
-          price: takeProfit,
-          color: "#00FF88",
-          lineWidth: 2,
-          lineStyle: LineStyle.Solid,
-          axisLabelVisible: true,
-          title: "TP",
-        });
-      }
-
-      // Load historical candles
-      try {
-        const res = await fetch(
-          `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=300`,
-        );
-        const raw: any[] = await res.json();
-        const candles: Candle[] = raw.map((c) => ({
-          time: Math.floor(c[0] / 1000),
-          open: +c[1],
-          high: +c[2],
-          low: +c[3],
-          close: +c[4],
-          volume: +c[5],
-        }));
-        candlesRef.current = candles;
-
-        candleSeries.setData(candles.map((c) => ({
-          time: c.time as any,
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
-        })));
-        volSeries.setData(candles.map((c) => ({
-          time: c.time as any,
-          value: c.volume,
-          color: c.close >= c.open ? "rgba(0,255,136,0.35)" : "rgba(255,51,102,0.35)",
-        })));
-
-        applyIndicators(candles);
-        const last = candles[candles.length - 1];
-        if (last) {
-          setLivePrice(last.close);
-          setLastUpdate(Date.now());
-        }
-        chart.timeScale().fitContent();
-      } catch (e) {
-        console.error("klines load failed", e);
-      }
-
-      // Connect WebSocket
-      const wsUrl = `wss://stream.binance.com:9443/ws/${symbol.toLowerCase()}@kline_${interval}`;
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-      setWsState("connecting");
-      ws.onopen = () => setWsState("open");
-      ws.onclose = () => setWsState("closed");
-      ws.onerror = () => setWsState("closed");
-      ws.onmessage = (ev) => {
-        try {
-          const msg = JSON.parse(ev.data);
-          const k = msg?.k;
-          if (!k) return;
-          const candle: Candle = {
-            time: Math.floor(k.t / 1000),
-            open: +k.o,
-            high: +k.h,
-            low: +k.l,
-            close: +k.c,
-            volume: +k.v,
-          };
-          const all = candlesRef.current;
-          const last = all[all.length - 1];
-          if (last && last.time === candle.time) {
-            all[all.length - 1] = candle;
-          } else if (!last || candle.time > last.time) {
-            all.push(candle);
-            if (all.length > 600) all.shift();
-          }
-          candleSeriesRef.current?.update({
-            time: candle.time as any,
-            open: candle.open,
-            high: candle.high,
-            low: candle.low,
-            close: candle.close,
-          });
-          volSeriesRef.current?.update({
-            time: candle.time as any,
-            value: candle.volume,
-            color: candle.close >= candle.open ? "rgba(0,255,136,0.35)" : "rgba(255,51,102,0.35)",
-          });
-          setLivePrice(candle.close);
-          setLastUpdate(Date.now());
-          // Indicators are relatively cheap on 300 candles; recompute
-          applyIndicators(all);
-        } catch {}
-      };
-
-      const onResize = () => {
-        if (containerRef.current && chartRef.current) {
-          chartRef.current.applyOptions({ width: containerRef.current.clientWidth });
-        }
-      };
-      window.addEventListener("resize", onResize);
-
-      cleanup = () => {
-        window.removeEventListener("resize", onResize);
-        try { ws.close(); } catch {}
-      };
+  const priceLines = useMemo((): ChartPriceLine[] => {
+    const lines: ChartPriceLine[] = [];
+    if (isValidPrice(entryPrice)) {
+      lines.push({ price: entryPrice, color: "#00F5FF", title: "ENTRY", dashed: true });
     }
-
-    init();
-
-    return () => {
-      cancelled = true;
-      cleanup?.();
-      try { wsRef.current?.close(); } catch {}
-      try { chartRef.current?.remove(); } catch {}
-      chartRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, interval, height]);
-
-  // Update SL/TP/Entry price lines if they change
-  useEffect(() => {
-    const series = candleSeriesRef.current;
-    if (!series) return;
-
-    const syncLine = (
-      ref: { current: any },
-      price: number | null | undefined,
-      options: { color: string; title: string; lineStyle: number }
-    ) => {
-      if (isValidPrice(price)) {
-        if (ref.current) ref.current.applyOptions({ price });
-        else {
-          ref.current = series.createPriceLine({
-            price,
-            color: options.color,
-            lineWidth: 2,
-            lineStyle: options.lineStyle,
-            axisLabelVisible: true,
-            title: options.title,
-          });
-        }
-        return;
-      }
-      if (ref.current) {
-        try {
-          series.removePriceLine(ref.current);
-        } catch {
-          /* ignore */
-        }
-        ref.current = null;
-      }
-    };
-
-    try {
-      syncLine(lineEntryRef, entryPrice, { color: "#00F5FF", title: "ENTRY", lineStyle: 2 });
-      syncLine(lineSLRef, stopLoss, { color: "#FF3366", title: "SL", lineStyle: 0 });
-      syncLine(lineTPRef, takeProfit, { color: "#00FF88", title: "TP", lineStyle: 0 });
-    } catch {
-      /* chart not ready */
+    if (isValidPrice(stopLoss)) {
+      lines.push({ price: stopLoss, color: "#FF3366", title: "SL" });
     }
+    if (isValidPrice(takeProfit)) {
+      lines.push({ price: takeProfit, color: "#00FF88", title: "TP" });
+    }
+    return lines;
   }, [entryPrice, stopLoss, takeProfit]);
 
-  function applyIndicators(candles: Candle[]) {
-    if (!candles.length) return;
-    const closes = candles.map((c) => c.close);
-    const e20 = ema(closes, 20);
-    const e50 = ema(closes, 50);
-    const bb = bollinger(closes, 20, 2);
-    const r = rsi(closes, 14);
-    const m = macd(closes, 12, 26, 9);
+  const pnlPct = livePrice ? ((livePrice - entryPrice) / entryPrice) * 100 : 0;
+  const pnlUsdc = livePrice && quantity ? (livePrice - entryPrice) * quantity : 0;
 
-    const mapSeries = (arr: number[]) =>
-      candles
-        .map((c, i) => ({ time: c.time as any, value: arr[i] }))
-        .filter((p) => Number.isFinite(p.value));
-
-    ema20Ref.current?.setData(mapSeries(e20));
-    ema50Ref.current?.setData(mapSeries(e50));
-    bbUpperRef.current?.setData(mapSeries(bb.upper));
-    bbMidRef.current?.setData(mapSeries(bb.middle));
-    bbLowerRef.current?.setData(mapSeries(bb.lower));
-
-    const idx = closes.length - 1;
-    const bbw =
-      Number.isFinite(bb.upper[idx]) && Number.isFinite(bb.lower[idx]) && bb.middle[idx]
-        ? ((bb.upper[idx] - bb.lower[idx]) / bb.middle[idx]) * 100
-        : NaN;
-    setSnapshot({
-      rsi: r[idx],
-      macdHist: m.hist[idx],
-      ema20: e20[idx],
-      ema50: e50[idx],
-      bbWidthPct: bbw,
-    });
-  }
-
-  const pnlPct = useMemo(() => {
-    if (!livePrice) return 0;
-    return ((livePrice - entryPrice) / entryPrice) * 100;
-  }, [livePrice, entryPrice]);
-  const pnlUsdc = useMemo(() => {
-    if (!livePrice || !quantity) return 0;
-    return (livePrice - entryPrice) * quantity;
-  }, [livePrice, entryPrice, quantity]);
-
-  const distToSL = useMemo(() => {
-    if (!livePrice || !isValidPrice(stopLoss)) return null;
-    return ((livePrice - stopLoss) / livePrice) * 100;
-  }, [livePrice, stopLoss]);
-  const distToTP = useMemo(() => {
-    if (!livePrice || !isValidPrice(takeProfit)) return null;
-    return ((takeProfit - livePrice) / livePrice) * 100;
-  }, [livePrice, takeProfit]);
+  const distToSL =
+    livePrice && isValidPrice(stopLoss) ? ((livePrice - stopLoss) / livePrice) * 100 : null;
+  const distToTP =
+    livePrice && isValidPrice(takeProfit) ? ((takeProfit - livePrice) / livePrice) * 100 : null;
 
   const hasSlTp = isValidPrice(stopLoss) && isValidPrice(takeProfit);
 
-  const agoSec = lastUpdate ? Math.floor((Date.now() - lastUpdate) / 1000) : null;
-
   return (
     <div className="space-y-3">
-      {/* Controls bar */}
-      <div className="flex flex-wrap items-center gap-2 justify-between">
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="mono text-xs text-text-muted uppercase tracking-widest flex items-center gap-2">
-            <Activity className="h-3.5 w-3.5 text-primary" />
-            {symbol}
-          </div>
-          <div className="flex rounded-md overflow-hidden border border-border/70">
-            {INTERVALS.map((iv) => (
-              <button
-                key={iv}
-                onClick={() => setInterval(iv)}
-                className={`px-2.5 py-1 text-[11px] mono transition ${
-                  interval === iv
-                    ? "bg-primary/20 text-primary"
-                    : "text-text-muted hover:text-text-primary hover:bg-surface-2/60"
-                }`}
-              >
-                {iv}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <span
-            className={`chip text-[10px] ${
-              wsState === "open"
-                ? "border-success/40 text-success"
-                : wsState === "connecting"
-                  ? "border-warning/40 text-warning"
-                  : "border-danger/40 text-danger"
-            }`}
-          >
-            {wsState === "open" ? <Wifi className="h-3 w-3" /> : wsState === "closed" ? <WifiOff className="h-3 w-3" /> : <Radio className="h-3 w-3 animate-pulse" />}
-            {wsState.toUpperCase()}
-            {agoSec !== null && wsState === "open" && <span className="opacity-60">· {agoSec}s</span>}
-          </span>
-          {livePrice !== null && (
-            <span className="chip border-primary/40 text-primary text-[11px]">
-              <span className="pulse-dot" /> {fmtNum(livePrice, 6)}
-            </span>
-          )}
-          <span className={`chip text-[11px] ${classOfPnl(pnlPct)} border-current/30`}>
-            {fmtPct(pnlPct)}
-          </span>
-        </div>
-      </div>
-
-      {/* Chart */}
-      <div
-        ref={containerRef}
-        className="w-full rounded-lg border border-border/60 bg-surface-2/20"
-        style={{ height }}
+      <MiniCandles
+        symbol={symbol}
+        exchange={exchange}
+        assetClass={assetClass}
+        testnet={testnet}
+        interval="15m"
+        showIntervalPicker
+        indicators={POSITION_INDICATORS}
+        priceLines={priceLines}
+        onLivePrice={setLivePrice}
+        title={symbol}
       />
 
-      {/* Legend */}
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] mono text-text-muted">
         <LegendSwatch color="#00F5FF" label="Entry (dashed)" />
         {isValidPrice(stopLoss) && <LegendSwatch color="#FF3366" label="Stop Loss" />}
         {isValidPrice(takeProfit) && <LegendSwatch color="#00FF88" label="Take Profit" />}
         {!hasSlTp && <span className="text-text-muted/80 italic">Fără SL/TP pe poziție</span>}
-        <LegendSwatch color="#FFC857" label="EMA20" />
-        <LegendSwatch color="#7B2FFF" label="EMA50" />
-        <LegendSwatch color="#5A7A9A" label="Bollinger 20/2 (dotted)" />
+        {livePrice != null && (
+          <span className={`chip text-[10px] ${classOfPnl(pnlPct)} border-current/30`}>
+            P&L live {fmtPct(pnlPct)}
+          </span>
+        )}
       </div>
 
-      {/* Quick stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
         <MiniStat label="Entry" value={fmtNum(entryPrice, 6)} />
         <MiniStat
           label="Stop Loss"
@@ -499,36 +124,17 @@ export function PositionChart({
           }
         />
         <MiniStat
+          label="Entry fee"
+          value={formatFee(entryFee, feeCurrency)}
+          sub={feeCurrency ? <span className="text-text-muted">{feeCurrency}</span> : undefined}
+        />
+        <MiniStat
           label={quantity ? "Unrealized P&L" : "Live"}
           value={quantity ? `${pnlUsdc >= 0 ? "+" : ""}${pnlUsdc.toFixed(4)}` : fmtNum(livePrice ?? 0, 6)}
           sub={quantity ? <span className={classOfPnl(pnlPct)}>{fmtPct(pnlPct)}</span> : undefined}
           valueClass={quantity ? classOfPnl(pnlUsdc) : ""}
         />
       </div>
-
-      {/* Indicator snapshot */}
-      {snapshot && (
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
-          <MiniStat
-            label="RSI 14"
-            value={Number.isFinite(snapshot.rsi) ? fmtNum(snapshot.rsi, 1) : "—"}
-            valueClass={
-              snapshot.rsi > 70 ? "text-danger" : snapshot.rsi < 30 ? "text-success" : "text-text-primary"
-            }
-          />
-          <MiniStat
-            label="MACD hist"
-            value={Number.isFinite(snapshot.macdHist) ? fmtNum(snapshot.macdHist, 4) : "—"}
-            valueClass={snapshot.macdHist >= 0 ? "text-success" : "text-danger"}
-          />
-          <MiniStat label="EMA20" value={Number.isFinite(snapshot.ema20) ? fmtNum(snapshot.ema20, 6) : "—"} />
-          <MiniStat label="EMA50" value={Number.isFinite(snapshot.ema50) ? fmtNum(snapshot.ema50, 6) : "—"} />
-          <MiniStat
-            label="BB width"
-            value={Number.isFinite(snapshot.bbWidthPct) ? `${snapshot.bbWidthPct.toFixed(2)}%` : "—"}
-          />
-        </div>
-      )}
     </div>
   );
 }

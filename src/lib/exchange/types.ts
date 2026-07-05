@@ -14,6 +14,8 @@ export type BuyFillResult = {
   orderId: string;
   executedQty: number;
   entryPrice: number;
+  entryFee?: number;
+  feeCurrency?: string;
   fills?: { qty: number; price: number; commission: number; commissionAsset: string }[];
 };
 
